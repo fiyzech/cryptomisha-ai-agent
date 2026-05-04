@@ -257,7 +257,7 @@ def choose_n_splits(n_samples: int) -> int:
 
 def get_xgb_params(actual_fetch_interval: str, scale_weight: float) -> dict:
     params = {"tree_method": "hist", "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 2,
-              "scale_pos_weight": scale_weight, "eval_metric": "logloss", "verbosity": 0, "random_state": 42}
+              "scale_pos_weight": scale_weight, "eval_metric": "logloss", "verbosity": 0, "random_state": 42, "n_jobs": -1}
     if actual_fetch_interval in ["5m", "15m"]:
         params.update({"max_depth": 3, "learning_rate": 0.05, "n_estimators": 100, "gamma": 0.2, "reg_lambda": 2.0,
                        "reg_alpha": 0.5})

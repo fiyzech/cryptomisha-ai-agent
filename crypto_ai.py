@@ -354,25 +354,23 @@ def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, 
 
 
 def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news, history, user_q):
-    history_text = "\n".join(
-        [f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in
-         history[-6:]])
-    news_text = "Останні заголовки новин:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
-    return f"""Ти — Міша (CryptoMisha AI), дружній AI-співрозмовник.
-Відповідай чистою українською.
+    history_text = "\n".join([f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in history[-6:]])
+    news_text = "Останні заголовки новин:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
+    return f"""Ти — Міша (CryptoMisha AI), професійний крипто-аналітик і трейдер.
+Спілкуйся чистою українською мовою. Твій стиль: лаконічний, впевнений, трохи зухвалий, але по ділу.
+ЖОДНИХ повторень привітань типу "Привіт! Як справи?". Відповідай прямо на запитання. Ніколи не вибачайся.
+Якщо питають про погоду чи речі не по темі - жартуй, що ти слідкуєш за графіками, а не за хмарами.
 
 Контекст ринку:
 {name} ({symbol}) | Ціна: {fmt_price(price)} | 24г: {change_24h:+.2f}% | 7д: {change_7d:+.2f}%
-Капіталізація: {fmt_large(cap)} | Обсяг: {fmt_large(vol)}
 {news_text}
 
-Історія:
+Історія чату:
 {history_text}
 
-Поточний запит: {user_q}
+Запит користувача: {user_q}
 
-Твоя відповідь:"""
+Твоя відповідь (тільки суть):"""
 
 
 for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []),

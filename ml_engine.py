@@ -94,7 +94,6 @@ def calculate_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, k_pe
 
 
 def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 3000):
-    # ФІКС BINANCE Cloud: Тільки один безпечний ендпоінт, щоб не було нескінченного циклу перевірок
     url = "https://data-api.binance.vision/api/v3/klines"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
@@ -109,7 +108,7 @@ def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int
         if end_time: params["endTime"] = end_time
 
         try:
-            res = requests.get(url, params=params, headers=headers, timeout=4)
+            res = requests.get(url, params=params, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 if not data or not isinstance(data, list): break
@@ -118,9 +117,9 @@ def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int
                 remaining -= len(data)
                 if len(data) < current_limit: break
             else:
-                break  # Якщо зловили блок - виходимо моментально
+                break
         except Exception:
-            break  # Якщо таймаут - теж моментально виходимо
+            break
 
         time.sleep(0.1)
 
@@ -323,7 +322,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     df = fetch_binance_data(f"{binance_sym}USDT", interval=actual_fetch_interval, limit=3000)
     min_bars_required = 200
     if df is None or len(df) < min_bars_required: return {"status": "error",
-                                                          "reason": f"Немає достатньо даних для {symbol} ({binance_sym}) на таймфреймі {actual_fetch_interval} (спрацював блок від Binance)"}
+                                                          "reason": f"Немає достатньо даних для {symbol} ({binance_sym}) на таймфреймі {actual_fetch_interval} (можливо, блокування Binance)"}
 
     df = add_core_features(df)
     df = merge_multi_timeframe_features(df, binance_sym, actual_fetch_interval)

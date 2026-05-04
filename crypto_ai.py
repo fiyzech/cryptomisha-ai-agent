@@ -16,8 +16,8 @@ st.set_page_config(
 )
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-# Оскільки ми перейшли на Groq, назву моделі зафіксуємо тут
-MODEL_NAME = "gemma2-9b-it"
+# ФІКС: Нова найрозумніша модель від Meta, оскільки Groq видалив Gemma
+MODEL_NAME = "llama-3.3-70b-versatile"
 NEWSAPI_KEY = st.secrets.get("NEWSAPI_KEY", os.getenv("NEWSAPI_KEY", ""))
 
 TIMEFRAME_OPTIONS = {
@@ -45,215 +45,69 @@ st.markdown("""
     --yellow: #fbbf24;
 }
 
-/* Глобальний шрифт Montserrat */
 html, body, .stApp, p, div, span, li, a, button, input, select {
     font-family: 'Montserrat', sans-serif !important;
     color: var(--text);
 }
-.stApp {
-    background-color: var(--bg) !important;
-}
-
-/* ФІКС ІКОНОК: Повертаємо іконкам стрілочок їхній шрифт */
-.material-symbols-rounded, .material-icons, summary span {
-    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
-}
-
-/* Винятки для моноширинного шрифту */
-.hint, .ml-acc, .card-title, .msg-label, .price-big, .chip-label {
-    font-family: 'Space Mono', monospace !important;
-}
-
+.stApp { background-color: var(--bg) !important; }
+.material-symbols-rounded, .material-icons, summary span { font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important; }
+.hint, .ml-acc, .card-title, .msg-label, .price-big, .chip-label { font-family: 'Space Mono', monospace !important; }
 #MainMenu, footer, header { visibility: hidden; }
 .block-container { padding: 2rem 2rem 4rem; max-width: 1100px; }
-
-/* CryptoPulse Header */
-.hero-title {
-    font-size: 2.8rem;
-    font-weight: 800;
-    color: #FFFFFF;
-    margin-bottom: 0;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-.hero-title::before {
-    content: '✦';
-    color: #8348C1;
-}
-.hero-sub {
-    color: var(--muted);
-    font-size: 0.85rem;
-    margin-bottom: 2rem;
-}
-
-/* CryptoPulse Cards */
+.hero-title { font-size: 2.8rem; font-weight: 800; color: #FFFFFF; margin-bottom: 0; display: flex; align-items: center; gap: 12px; }
+.hero-title::before { content: '✦'; color: #8348C1; }
+.hero-sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
 .card, .ml-card, .news-card {
-    background: var(--surface) !important;
-    border-radius: 16px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-    position: relative;
+    background: var(--surface) !important; border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem; position: relative;
     box-shadow: 0 20px 70px rgba(131,72,193,0.10), 0 8px 25px rgba(0,0,0,0.35);
 }
 .card::before, .ml-card::before, .news-card::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 16px;
-    padding: 1px; 
+    content: ""; position: absolute; inset: 0; border-radius: 16px; padding: 1px; 
     background: linear-gradient(90deg, rgba(82,46,139,0.32), rgba(179,179,179,0.32));
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
 }
-
-.card-title {
-    font-size: 0.85rem;
-    font-weight: 500;
-    color: var(--muted);
-    margin-bottom: 0.5rem;
-    display: flex;
-    justify-content: space-between;
-}
-.price-big {
-    font-size: 2.6rem;
-    font-weight: 800;
-    color: var(--green);
-}
+.card-title { font-size: 0.85rem; font-weight: 500; color: var(--muted); margin-bottom: 0.5rem; display: flex; justify-content: space-between; }
+.price-big { font-size: 2.6rem; font-weight: 800; color: var(--green); }
 .change-pos { color: var(--green) !important; font-weight: 600; }
 .change-neg { color: var(--red) !important; font-weight: 600; }
-
-/* Chat Messages */
-.msg-user {
-    background: rgba(131,72,193,0.1);
-    border: 1px solid rgba(131,72,193,0.3);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-    margin: 0.75rem 0;
-    font-size: 0.95rem;
-}
-.msg-ai {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-    margin: 0.75rem 0;
-    font-size: 0.95rem;
-    line-height: 1.7;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-}
-.msg-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 0.5rem;
-}
-.msg-label-ai { color: var(--accent); }
-.msg-label-user { color: #FFFFFF; }
-
-/* Dashboard Tables / Rows */
-.stat-row { 
-    background: transparent;
-    border-top: 1px solid var(--border);
-    padding-top: 1rem;
-    display: flex; 
-    gap: 1.5rem; 
-    flex-wrap: wrap; 
-    margin-top: 1rem; 
-}
+.msg-user { background: rgba(131,72,193,0.1); border: 1px solid rgba(131,72,193,0.3); border-radius: 12px; padding: 1rem 1.2rem; margin: 0.75rem 0; font-size: 0.95rem; }
+.msg-ai { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.2rem; margin: 0.75rem 0; font-size: 0.95rem; line-height: 1.7; box-shadow: 0 8px 25px rgba(0,0,0,0.2); }
+.msg-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
+.msg-label-ai { color: var(--accent); } .msg-label-user { color: #FFFFFF; }
+.stat-row { background: transparent; border-top: 1px solid var(--border); padding-top: 1rem; display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 1rem; }
 .stat-chip { display: flex; flex-direction: column; }
 .chip-label { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
 .stat-chip span:last-child { color: var(--text); font-weight: 600; font-size: 15px; }
-
-/* ML Card Specifics */
 .ml-signal-long  { color: var(--green) !important; font-size: 1.8rem; font-weight: 800 !important; }
 .ml-signal-short { color: var(--red) !important; font-size: 1.8rem; font-weight: 800 !important; }
 .ml-signal-neutral { color: var(--yellow) !important; font-size: 1.8rem; font-weight: 800 !important; }
 .ml-conf { font-size: 1rem; color: var(--muted); font-weight: 500; font-family: 'Montserrat', sans-serif !important;}
 .ml-indicators { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
-
-/* Тултипи */
 [data-tooltip] { position: relative; cursor: help; }
 [data-tooltip]:hover::after {
-    content: attr(data-tooltip);
-    position: absolute;
-    bottom: 130%; left: 50%; transform: translateX(-50%);
-    background-color: #050506 !important;
-    border: 1px solid #8348C1; color: #FFFFFF;
-    padding: 10px 14px; border-radius: 8px; font-size: 12px;
-    font-weight: 500; font-family: 'Montserrat', sans-serif !important;
-    white-space: normal; width: max-content; max-width: 250px;
-    z-index: 99999; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-    line-height: 1.4; text-align: left;
+    content: attr(data-tooltip); position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+    background-color: #050506 !important; border: 1px solid #8348C1; color: #FFFFFF; padding: 10px 14px; border-radius: 8px; font-size: 12px;
+    font-weight: 500; font-family: 'Montserrat', sans-serif !important; white-space: normal; width: max-content; max-width: 250px;
+    z-index: 99999; box-shadow: 0 10px 30px rgba(0,0,0,0.8); line-height: 1.4; text-align: left;
 }
-
-.ml-chip {
-    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
-    border-radius: 8px; padding: 0.4rem 0.8rem; font-size: 0.8rem;
-}
+.ml-chip { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.8rem; font-size: 0.8rem; }
 .ml-chip-label { color: var(--muted); margin-right: 4px; }
 .ml-acc { font-size: 0.75rem; color: var(--muted); margin-top: 0.8rem; }
-
-/* Інпути Streamlit */
-.stTextInput > div > div > input, .stSelectbox > div > div {
-    background-color: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text) !important;
-    border-radius: 12px !important;
-}
-.stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within {
-    box-shadow: 0 0 0 1px #8348C1 !important; border-color: #8348C1 !important;
-}
-
-/* ФІКС ВИПАДАЮЧИХ СПИСКІВ */
-[data-baseweb="popover"], [data-baseweb="popover"] > div,
-[data-testid="stVirtualDropdown"], [data-testid="stVirtualDropdown"] > div,
-[data-testid="stVirtualDropdown"] ul, ul[role="listbox"], div[role="listbox"] {
-    background-color: #050506 !important;
-}
-[data-baseweb="popover"] > div, [data-testid="stVirtualDropdown"] {
-    border: 1px solid rgba(131,72,193,0.6) !important; border-radius: 12px !important;
-    box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important; overflow: hidden !important;
-}
-li[role="option"], div[role="option"] {
-    background-color: transparent !important; color: #FFFFFF !important;
-    font-family: 'Montserrat', sans-serif !important; padding-top: 8px !important; padding-bottom: 8px !important;
-}
-li[role="option"]:hover, li[role="option"][aria-selected="true"],
-div[role="option"]:hover, div[role="option"][aria-selected="true"] {
-    background-color: rgba(131,72,193,0.5) !important; color: #FFFFFF !important;
-}
-
-/* ФІКС ЖУРНАЛУ ЛОГІВ */
-div[data-testid="stExpander"], details[data-testid="stExpander"] {
-    background-color: #050506 !important; border: 1px solid rgba(131,72,193,0.4) !important; border-radius: 12px !important;
-}
-div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summary p {
-    font-family: 'Montserrat', sans-serif !important; color: #FFFFFF !important; font-weight: 600 !important;
-}
-
-/* Кнопка з анімацією */
-.stButton > button {
-    background: linear-gradient(90deg, #2C1969 0%, #8348C1 50%, #C38BFF 100%) !important;
-    color: #FFFFFF !important; border: none !important; border-radius: 28px !important;
-    font-weight: 500 !important; font-size: 14px !important; height: 44px !important;
-    padding: 0 24px !important; transition-property: transform !important;
-    transition-duration: 150ms !important;
-}
+.stTextInput > div > div > input, .stSelectbox > div > div { background-color: var(--surface) !important; border: 1px solid var(--border) !important; color: var(--text) !important; border-radius: 12px !important; }
+.stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within { box-shadow: 0 0 0 1px #8348C1 !important; border-color: #8348C1 !important; }
+[data-baseweb="popover"], [data-baseweb="popover"] > div, [data-testid="stVirtualDropdown"], [data-testid="stVirtualDropdown"] > div, [data-testid="stVirtualDropdown"] ul, ul[role="listbox"], div[role="listbox"] { background-color: #050506 !important; }
+[data-baseweb="popover"] > div, [data-testid="stVirtualDropdown"] { border: 1px solid rgba(131,72,193,0.6) !important; border-radius: 12px !important; box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important; overflow: hidden !important; }
+li[role="option"], div[role="option"] { background-color: transparent !important; color: #FFFFFF !important; font-family: 'Montserrat', sans-serif !important; padding-top: 8px !important; padding-bottom: 8px !important; }
+li[role="option"]:hover, li[role="option"][aria-selected="true"], div[role="option"]:hover, div[role="option"][aria-selected="true"] { background-color: rgba(131,72,193,0.5) !important; color: #FFFFFF !important; }
+div[data-testid="stExpander"], details[data-testid="stExpander"] { background-color: #050506 !important; border: 1px solid rgba(131,72,193,0.4) !important; border-radius: 12px !important; }
+div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summary p { font-family: 'Montserrat', sans-serif !important; color: #FFFFFF !important; font-weight: 600 !important; }
+.stButton > button { background: linear-gradient(90deg, #2C1969 0%, #8348C1 50%, #C38BFF 100%) !important; color: #FFFFFF !important; border: none !important; border-radius: 28px !important; font-weight: 500 !important; font-size: 14px !important; height: 44px !important; padding: 0 24px !important; transition-property: transform !important; transition-duration: 150ms !important; }
 .stButton > button:hover { transform: scale(1.05) !important; }
 .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
 .hint { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; cursor: default; }
 .thinking { color: var(--muted); font-style: italic; animation: pulse 1.5s infinite; }
 @keyframes pulse { 0%{opacity:.5} 50%{opacity:1} 100%{opacity:.5} }
-
-/* News Styles */
-.news-card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
-    padding: 1rem; margin: 0.5rem 0; box-shadow: 0 8px 25px rgba(0,0,0,0.2);
-}
+.news-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin: 0.5rem 0; box-shadow: 0 8px 25px rgba(0,0,0,0.2); }
 .news-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.5rem; }
 .news-title a { color: var(--text); text-decoration: none; }
 .news-title a:hover { color: var(--accent); }
@@ -335,7 +189,6 @@ def get_binance_tickers():
         pass
 
     try:
-        # ГОЛОВНИЙ ФІКС BINANCE Cloud:
         b_r = requests.get("https://data-api.binance.vision/api/v3/exchangeInfo", timeout=5)
         if b_r.status_code == 200:
             symbols = b_r.json().get("symbols", [])
@@ -449,7 +302,6 @@ def get_crypto_news(coin_name: str, symbol: str = ""):
 
 
 def stream_ollama(prompt: str):
-    # ФІКС Groq API з .strip() для ключів
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "").strip()
     if not GROQ_API_KEY:
         yield "⚠️ Ключ GROQ_API_KEY не знайдено! Додай його у Secrets на Streamlit Cloud."
@@ -462,7 +314,6 @@ def stream_ollama(prompt: str):
         res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True,
                             timeout=30)
 
-        # Обробка помилки 400
         if res.status_code != 200:
             yield f"⚠️ Помилка Groq API (Код {res.status_code}): {res.text}"
             return
@@ -538,7 +389,8 @@ def handle_chat_submit():
 
 
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="hero-sub">// Binance + CoinGecko + NewsAPI + Groq AI (Gemma 2)</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="hero-sub">// Binance + CoinGecko + NewsAPI + Groq AI ({MODEL_NAME})</div>',
+            unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:

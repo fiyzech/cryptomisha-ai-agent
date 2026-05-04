@@ -548,38 +548,42 @@ def get_crypto_news(coin_name: str, symbol: str = ""):
 
 
 def stream_ollama(prompt: str):
+    # Тепер ми використовуємо хмарний Groq замість локальної Ollama
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+    if not GROQ_API_KEY:
+        yield "⚠️ Ключ GROQ_API_KEY не знайдено! Додай його у Secrets на Streamlit Cloud."
+        return
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "gemma2-9b-it",  # Офіційна хмарна Gemma 2
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": True
+    }
+
     try:
-        with requests.post(
-                OLLAMA_URL,
-                json={
-                    "model": MODEL_NAME,
-                    "prompt": prompt,
-                    "stream": True,
-                    "options": {"temperature": 0.2, "top_p": 0.9},
-                },
-                timeout=90,
-                stream=True,
-        ) as r:
+        with requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True,
+                           timeout=30) as r:
             r.raise_for_status()
-
             for line in r.iter_lines():
-                if not line:
-                    continue
-                try:
-                    decoded_line = json.loads(line.decode("utf-8"))
-                    chunk = decoded_line.get("response", "")
-                    if chunk:
-                        yield chunk
-                except json.JSONDecodeError:
-                    continue
-
-    except requests.exceptions.ConnectionError:
-        yield "⚠️ Ollama не запущено на вашому пристрою. Запусти Ollama."
-    except requests.exceptions.Timeout:
-        yield "⚠️ Ollama відповідає надто довго."
+                if line:
+                    decoded_line = line.decode("utf-8")
+                    if decoded_line.startswith("data: "):
+                        if decoded_line == "data: [DONE]":
+                            break
+                        try:
+                            chunk = json.loads(decoded_line[6:])
+                            delta = chunk["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                yield delta
+                        except:
+                            pass
     except Exception as e:
-        yield f"⚠️ Помилка: {e}"
-
+        yield f"⚠️ Помилка з'єднання з хмарним AI: {e}"
 
 def build_analysis_prompt(name: str, symbol: str, price: float, change_24h: float,
                           change_7d: float, cap: float, vol: float, ath: float,

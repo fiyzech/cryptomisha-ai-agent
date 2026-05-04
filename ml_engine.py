@@ -149,10 +149,24 @@ def calculate_stochastic(
 
 
 def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 3000):
-    url = "https://api.binance.com/api/v3/klines"
+    """
+    Бронебійна функція для завантаження даних, стійка до блокувань у хмарі (Streamlit Cloud / AWS / GCP).
+    Використовує клауд-френдлі ендпоінти, ротацію та фейковий User-Agent.
+    """
+    endpoints = [
+        "https://data-api.binance.vision/api/v3/klines",
+        "https://api1.binance.com/api/v3/klines",
+        "https://api2.binance.com/api/v3/klines",
+        "https://api3.binance.com/api/v3/klines",
+        "https://api.binance.com/api/v3/klines"
+    ]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     all_data = []
     end_time = None
-
     req_limit = 1000
     remaining = limit
 
@@ -163,29 +177,36 @@ def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int
         if end_time:
             params["endTime"] = end_time
 
-        try:
-            res = requests.get(url, params=params, timeout=10)
-            if res.status_code != 200:
-                print(f"[ml_engine] fetch error: HTTP {res.status_code} - {res.text}")
-                break
+        success = False
 
-            data = res.json()
-            if not data or not isinstance(data, list):
-                break
+        # Ротація ендпоінтів на випадок блокування
+        for url in endpoints:
+            try:
+                res = requests.get(url, params=params, headers=headers, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    if not data or not isinstance(data, list):
+                        remaining = 0  # Немає даних - форсуємо вихід
+                        success = True
+                        break
 
-            all_data.extend(data)
+                    all_data.extend(data)
+                    end_time = data[0][0] - 1
+                    remaining -= len(data)
+                    success = True
 
-            end_time = data[0][0] - 1
-            remaining -= len(data)
+                    if len(data) < current_limit:
+                        remaining = 0  # Досягли початку історії
 
-            if len(data) < current_limit:
-                break
+                    break  # Успішний запит, виходимо з циклу ендпоінтів
+            except Exception as e:
+                continue  # Якщо помилка/таймаут - пробуємо наступний дзеркальний URL
 
-            time.sleep(0.1)
-
-        except Exception as e:
-            print(f"[ml_engine] fetch exception: {e}")
+        if not success:
+            print(f"[ml_engine] Не вдалося витягнути дані для {symbol} ({interval}) з усіх джерел.")
             break
+
+        time.sleep(0.2)  # Пауза щоб не зловити Rate Limit
 
     if not all_data:
         return None
@@ -531,7 +552,7 @@ def get_ml_signal(
     if df is None or len(df) < min_bars_required:
         return {
             "status": "error",
-            "reason": f"Немає достатньо даних для {symbol} ({binance_sym}) на таймфреймі {actual_fetch_interval}",
+            "reason": f"Немає достатньо даних для {symbol} ({binance_sym}) на таймфреймі {actual_fetch_interval} (спрацював блок від Binance)",
         }
 
     df = add_core_features(df)
@@ -665,6 +686,7 @@ def get_ml_signal(
     log_prediction(result)
 
     return result
+
 
 if __name__ == "__main__":
     result = get_ml_signal("BTC", interval="1d")

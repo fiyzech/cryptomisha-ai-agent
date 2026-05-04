@@ -786,26 +786,50 @@ def translate_to_uk(text: str) -> str:
 
 @st.cache_data(ttl=1800)
 def get_crypto_news(coin_name: str, symbol: str = ""):
-    # Використовуємо CryptoCompare API (не блокує хмару і не потребує API-ключа)
+    if not NEWSAPI_KEY:
+        return []
+
+    query = f'"{coin_name}" OR ("{symbol}" AND crypto)'
+
     try:
-        url = f"https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories={symbol.upper()}"
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            data = r.json().get("Data", [])
-            cleaned = []
-            for a in data[:3]:  # Беремо 3 найсвіжіші новини
-                title = a.get("title", "")
-                ukr_title = translate_to_uk(title) # Перекладаємо українською
-                cleaned.append({
-                    "title": ukr_title,
-                    "url": a.get("url", ""),
-                    "source": {"name": a.get("source_info", {}).get("name", "Crypto News")},
-                    "publishedAt": "Сьогодні"
-                })
-            return cleaned
+        r = requests.get(
+            "https://newsapi.org/v2/everything",
+            params={
+                "q": query,
+                "sortBy": "publishedAt",
+                "language": "en",
+                "pageSize": 3,
+                "apiKey": NEWSAPI_KEY
+            },
+            timeout=10
+        )
+
+        if r.status_code != 200:
+            return []
+
+        articles = r.json().get("articles", [])
+        cleaned, seen = [], set()
+
+        for a in articles:
+            title = (a.get("title") or "").strip()
+            if not title or title in seen:
+                continue
+
+            seen.add(title)
+            ukr_title = translate_to_uk(title)
+
+            cleaned.append({
+                "title": ukr_title,
+                "url": a.get("url", ""),
+                "source": {
+                    "name": a.get("source", {}).get("name", "Unknown")
+                },
+                "publishedAt": a.get("publishedAt", "")
+            })
+
+        return cleaned
     except Exception:
-        pass
-    return []
+        return []
 
 def stream_ollama(prompt: str):
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "").strip()

@@ -1,0 +1,18 @@
+# Секрети Streamlit та змінні середовища
+.streamlit/secrets.toml
+.env
+
+# Логи та бази даних
+predictions_log.csv
+
+# Системні файли Python
+__pycache__/
+*.pyc
+.DS_Store
+
+# Віртуальне середовище
+venv/
+env/
+.venv/
+.venv1/
+.venv2/

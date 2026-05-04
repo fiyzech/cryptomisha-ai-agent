@@ -16,8 +16,8 @@ st.set_page_config(
 )
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-MODEL_NAME = os.getenv("OLLAMA_MODEL", "gemma2")
+# Оскільки ми перейшли на Groq, назву моделі зафіксуємо тут
+MODEL_NAME = "gemma2-9b-it"
 NEWSAPI_KEY = st.secrets.get("NEWSAPI_KEY", os.getenv("NEWSAPI_KEY", ""))
 
 TIMEFRAME_OPTIONS = {
@@ -54,12 +54,12 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
     background-color: var(--bg) !important;
 }
 
-/* ФІКС ІКОНОК: Повертаємо іконкам стрілочок їхній шрифт, щоб не вилазив текст _arrow_right_ */
+/* ФІКС ІКОНОК: Повертаємо іконкам стрілочок їхній шрифт */
 .material-symbols-rounded, .material-icons, summary span {
     font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
 }
 
-/* Винятки для моноширинного шрифту (цифри та системні надписи) */
+/* Винятки для моноширинного шрифту */
 .hint, .ml-acc, .card-title, .msg-label, .price-big, .chip-label {
     font-family: 'Space Mono', monospace !important;
 }
@@ -87,7 +87,7 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
     margin-bottom: 2rem;
 }
 
-/* CryptoPulse Cards (Gradient Border + Shadow) */
+/* CryptoPulse Cards */
 .card, .ml-card, .news-card {
     background: var(--surface) !important;
     border-radius: 16px;
@@ -122,7 +122,6 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
     font-weight: 800;
     color: var(--green);
 }
-
 .change-pos { color: var(--green) !important; font-weight: 600; }
 .change-neg { color: var(--red) !important; font-weight: 600; }
 
@@ -165,10 +164,7 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
     flex-wrap: wrap; 
     margin-top: 1rem; 
 }
-.stat-chip {
-    display: flex;
-    flex-direction: column;
-}
+.stat-chip { display: flex; flex-direction: column; }
 .chip-label { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
 .stat-chip span:last-child { color: var(--text); font-weight: 600; font-size: 15px; }
 
@@ -179,46 +175,27 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
 .ml-conf { font-size: 1rem; color: var(--muted); font-weight: 500; font-family: 'Montserrat', sans-serif !important;}
 .ml-indicators { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
 
-/* КАСТОМНІ ТУЛТИПИ ДЛЯ ІНДИКАТОРІВ (БЕЗ ПІДКРЕСЛЕНЬ) */
-[data-tooltip] {
-    position: relative;
-    cursor: help;
-}
+/* Тултипи */
+[data-tooltip] { position: relative; cursor: help; }
 [data-tooltip]:hover::after {
     content: attr(data-tooltip);
     position: absolute;
-    bottom: 130%;
-    left: 50%;
-    transform: translateX(-50%);
+    bottom: 130%; left: 50%; transform: translateX(-50%);
     background-color: #050506 !important;
-    border: 1px solid #8348C1;
-    color: #FFFFFF;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 500;
-    font-family: 'Montserrat', sans-serif !important;
-    white-space: normal;
-    width: max-content;
-    max-width: 250px;
-    z-index: 99999;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-    line-height: 1.4;
-    text-transform: none;
-    letter-spacing: normal;
-    text-align: left;
+    border: 1px solid #8348C1; color: #FFFFFF;
+    padding: 10px 14px; border-radius: 8px; font-size: 12px;
+    font-weight: 500; font-family: 'Montserrat', sans-serif !important;
+    white-space: normal; width: max-content; max-width: 250px;
+    z-index: 99999; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+    line-height: 1.4; text-align: left;
 }
 
 .ml-chip {
-    background: rgba(255,255,255,0.03);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.4rem 0.8rem;
-    font-size: 0.8rem;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.4rem 0.8rem; font-size: 0.8rem;
 }
 .ml-chip-label { color: var(--muted); margin-right: 4px; }
 .ml-acc { font-size: 0.75rem; color: var(--muted); margin-top: 0.8rem; }
-
 
 /* Інпути Streamlit */
 .stTextInput > div > div > input, .stSelectbox > div > div {
@@ -228,78 +205,45 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
     border-radius: 12px !important;
 }
 .stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within {
-    box-shadow: 0 0 0 1px #8348C1 !important;
-    border-color: #8348C1 !important;
+    box-shadow: 0 0 0 1px #8348C1 !important; border-color: #8348C1 !important;
 }
 
-/* ЗАЛІЗОБЕТОННИЙ ФІКС ВИПАДАЮЧИХ СПИСКІВ (STREAMLIT VIRTUAL DROPDOWN) */
-[data-baseweb="popover"],
-[data-baseweb="popover"] > div,
-[data-testid="stVirtualDropdown"],
-[data-testid="stVirtualDropdown"] > div,
-[data-testid="stVirtualDropdown"] ul,
-ul[role="listbox"],
-div[role="listbox"] {
+/* ФІКС ВИПАДАЮЧИХ СПИСКІВ */
+[data-baseweb="popover"], [data-baseweb="popover"] > div,
+[data-testid="stVirtualDropdown"], [data-testid="stVirtualDropdown"] > div,
+[data-testid="stVirtualDropdown"] ul, ul[role="listbox"], div[role="listbox"] {
     background-color: #050506 !important;
 }
-
-[data-baseweb="popover"] > div,
-[data-testid="stVirtualDropdown"] {
-    border: 1px solid rgba(131,72,193,0.6) !important;
-    border-radius: 12px !important;
-    box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important;
-    overflow: hidden !important;
+[data-baseweb="popover"] > div, [data-testid="stVirtualDropdown"] {
+    border: 1px solid rgba(131,72,193,0.6) !important; border-radius: 12px !important;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important; overflow: hidden !important;
+}
+li[role="option"], div[role="option"] {
+    background-color: transparent !important; color: #FFFFFF !important;
+    font-family: 'Montserrat', sans-serif !important; padding-top: 8px !important; padding-bottom: 8px !important;
+}
+li[role="option"]:hover, li[role="option"][aria-selected="true"],
+div[role="option"]:hover, div[role="option"][aria-selected="true"] {
+    background-color: rgba(131,72,193,0.5) !important; color: #FFFFFF !important;
 }
 
-li[role="option"],
-div[role="option"] {
-    background-color: transparent !important;
-    color: #FFFFFF !important;
-    font-family: 'Montserrat', sans-serif !important;
-    padding-top: 8px !important;
-    padding-bottom: 8px !important;
-}
-
-li[role="option"]:hover, 
-li[role="option"][aria-selected="true"],
-div[role="option"]:hover, 
-div[role="option"][aria-selected="true"] {
-    background-color: rgba(131,72,193,0.5) !important;
-    color: #FFFFFF !important;
-}
-
-/* ФІКС ЖУРНАЛУ ЛОГІВ (EXPANDER) ЩОБ ТЕКСТ НЕ НАЛАЗИВ */
+/* ФІКС ЖУРНАЛУ ЛОГІВ */
 div[data-testid="stExpander"], details[data-testid="stExpander"] {
-    background-color: #050506 !important;
-    border: 1px solid rgba(131,72,193,0.4) !important;
-    border-radius: 12px !important;
+    background-color: #050506 !important; border: 1px solid rgba(131,72,193,0.4) !important; border-radius: 12px !important;
 }
 div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summary p {
-    font-family: 'Montserrat', sans-serif !important;
-    color: #FFFFFF !important;
-    font-weight: 600 !important;
+    font-family: 'Montserrat', sans-serif !important; color: #FFFFFF !important; font-weight: 600 !important;
 }
 
-
-/* CryptoPulse Кнопка з анімацією */
+/* Кнопка з анімацією */
 .stButton > button {
     background: linear-gradient(90deg, #2C1969 0%, #8348C1 50%, #C38BFF 100%) !important;
-    color: #FFFFFF !important;
-    border: none !important;
-    border-radius: 28px !important;
-    font-weight: 500 !important;
-    font-size: 14px !important;
-    line-height: 20px !important;
-    height: 44px !important;
-    padding: 0 24px !important;
-    transition-property: transform !important;
-    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+    color: #FFFFFF !important; border: none !important; border-radius: 28px !important;
+    font-weight: 500 !important; font-size: 14px !important; height: 44px !important;
+    padding: 0 24px !important; transition-property: transform !important;
     transition-duration: 150ms !important;
 }
-.stButton > button:hover {
-    transform: scale(1.05) !important;
-}
-
+.stButton > button:hover { transform: scale(1.05) !important; }
 .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
 .hint { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; cursor: default; }
 .thinking { color: var(--muted); font-style: italic; animation: pulse 1.5s infinite; }
@@ -307,12 +251,8 @@ div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summa
 
 /* News Styles */
 .news-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1rem;
-    margin: 0.5rem 0;
-    box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1rem; margin: 0.5rem 0; box-shadow: 0 8px 25px rgba(0,0,0,0.2);
 }
 .news-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.5rem; }
 .news-title a { color: var(--text); text-decoration: none; }
@@ -323,64 +263,49 @@ div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summa
 
 
 def safe_text(value) -> str:
-    if value is None:
-        return "—"
+    if value is None: return "—"
     return html.escape(str(value)).replace("\n", "<br>")
 
 
 def safe_price(value) -> str:
-    if value is None:
-        return "—"
+    if value is None: return "—"
     try:
         value = float(value)
-    except (TypeError, ValueError):
+    except:
         return "—"
-
-    if value >= 1:
-        return f"${value:,.2f}"
-    if value >= 0.01:
-        return f"${value:.4f}"
+    if value >= 1: return f"${value:,.2f}"
+    if value >= 0.01: return f"${value:.4f}"
     return f"${value:.8f}"
 
 
 def safe_url(url: str) -> str:
-    if not url:
-        return "#"
+    if not url: return "#"
     url = str(url).strip()
-    if url.startswith("http://") or url.startswith("https://"):
-        return html.escape(url, quote=True)
+    if url.startswith("http://") or url.startswith("https://"): return html.escape(url, quote=True)
     return "#"
 
 
 def fmt_price(v: float) -> str:
-    if v >= 1:
-        return f"${v:,.2f}"
-    if v >= 0.01:
-        return f"${v:.4f}"
+    if v >= 1: return f"${v:,.2f}"
+    if v >= 0.01: return f"${v:.4f}"
     return f"${v:.8f}"
 
 
 def fmt_large(v: float) -> str:
-    if v >= 1e9:
-        return f"${v / 1e9:.2f}B"
-    if v >= 1e6:
-        return f"${v / 1e6:.2f}M"
+    if v >= 1e9: return f"${v / 1e9:.2f}B"
+    if v >= 1e6: return f"${v / 1e6:.2f}M"
     return f"${v:,.0f}"
 
 
 def rsi_color(rsi: float) -> str:
-    if rsi >= 70:
-        return "#FF3B30"
-    if rsi <= 30:
-        return "#00E676"
+    if rsi >= 70: return "#FF3B30"
+    if rsi <= 30: return "#00E676"
     return "#A3A4B0"
 
 
 def get_signal_style(signal: str):
-    if "LONG" in signal:
-        return "ml-signal-long", "#00E676"
-    if "SHORT" in signal:
-        return "ml-signal-short", "#FF3B30"
+    if "LONG" in signal: return "ml-signal-long", "#00E676"
+    if "SHORT" in signal: return "ml-signal-short", "#FF3B30"
     return "ml-signal-neutral", "#fbbf24"
 
 
@@ -399,18 +324,19 @@ def get_binance_tickers():
     }
 
     try:
-        cg_r = requests.get(f"{COINGECKO_BASE}/coins/list", timeout=10)
+        cg_r = requests.get(f"{COINGECKO_BASE}/coins/list", timeout=5)
         if cg_r.status_code == 200:
             for coin in cg_r.json():
                 symbol = coin.get("symbol", "").upper()
                 name = coin.get("name", "")
                 if symbol and name and symbol not in names_dict:
                     names_dict[symbol] = name
-    except Exception as e:
-        print(f"Не вдалося завантажити словник імен: {e}")
+    except Exception:
+        pass
 
     try:
-        b_r = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=10)
+        # ГОЛОВНИЙ ФІКС BINANCE Cloud:
+        b_r = requests.get("https://data-api.binance.vision/api/v3/exchangeInfo", timeout=5)
         if b_r.status_code == 200:
             symbols = b_r.json().get("symbols", [])
             tickers = set()
@@ -427,8 +353,7 @@ def get_binance_tickers():
             final_list = []
 
             def fmt(t):
-                if t in names_dict and names_dict[t].upper() != t:
-                    return f"{t} ({names_dict[t]})"
+                if t in names_dict and names_dict[t].upper() != t: return f"{t} ({names_dict[t]})"
                 return t
 
             for coin in top_coins_to_sort:
@@ -438,24 +363,22 @@ def get_binance_tickers():
 
             final_list.extend(sorted([fmt(t) for t in list(tickers)]))
             return final_list
-
-    except Exception as e:
-        print(f"Не вдалося завантажити тікери Binance: {e}")
+    except Exception:
+        pass
 
     return ["BTC (Bitcoin)", "ETH (Ethereum)", "SOL (Solana)", "SUI (Sui)"]
 
+
 @st.cache_data(ttl=3600)
 def search_coingecko_id(query: str):
-    if not query:
-        return None, None
+    if not query: return None, None
     try:
         r = requests.get(f"{COINGECKO_BASE}/search?query={query}", timeout=10)
         if r.status_code == 200:
             coins = r.json().get("coins", [])
             if coins:
                 for c in coins:
-                    if c.get("symbol", "").upper() == query.upper():
-                        return c.get("id"), c.get("name")
+                    if c.get("symbol", "").upper() == query.upper(): return c.get("id"), c.get("name")
                 return coins[0].get("id"), coins[0].get("name")
     except Exception:
         pass
@@ -465,16 +388,9 @@ def search_coingecko_id(query: str):
 @st.cache_data(ttl=120)
 def get_coin_data(coin_id: str):
     try:
-        r = requests.get(
-            f"{COINGECKO_BASE}/coins/{coin_id}",
-            params={
-                "localization": "false",
-                "tickers": "false",
-                "community_data": "true",
-                "developer_data": "false",
-            },
-            timeout=10,
-        )
+        r = requests.get(f"{COINGECKO_BASE}/coins/{coin_id}",
+                         params={"localization": "false", "tickers": "false", "community_data": "true",
+                                 "developer_data": "false"}, timeout=10)
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
@@ -483,13 +399,9 @@ def get_coin_data(coin_id: str):
 @st.cache_data(ttl=120)
 def get_sparkline(coin_id: str):
     try:
-        r = requests.get(
-            f"{COINGECKO_BASE}/coins/{coin_id}/market_chart",
-            params={"vs_currency": "usd", "days": "7", "interval": "daily"},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return [p[1] for p in r.json().get("prices", [])]
+        r = requests.get(f"{COINGECKO_BASE}/coins/{coin_id}/market_chart",
+                         params={"vs_currency": "usd", "days": "7", "interval": "daily"}, timeout=10)
+        if r.status_code == 200: return [p[1] for p in r.json().get("prices", [])]
         return []
     except Exception:
         return []
@@ -500,98 +412,80 @@ def get_ml_signal_cached(symbol: str, interval: str):
     return get_ml_signal(symbol, interval)
 
 
+def translate_to_uk(text: str) -> str:
+    if not text or text == "Без заголовку": return text
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "auto", "tl": "uk", "dt": "t", "q": text}
+        r = requests.get(url, params=params, timeout=3)
+        if r.status_code == 200: return "".join([s[0] for s in r.json()[0]])
+    except Exception:
+        pass
+    return text
+
+
 @st.cache_data(ttl=1800)
 def get_crypto_news(coin_name: str, symbol: str = ""):
-    if not NEWSAPI_KEY:
-        return []
-
-    query_parts = [f'"{coin_name}"']
-    if symbol:
-        query_parts.append(f'"{symbol}" AND crypto')
-    query = " OR ".join(query_parts)
-
+    if not NEWSAPI_KEY: return []
+    query = f'"{coin_name}" OR ("{symbol}" AND crypto)'
     try:
-        r = requests.get(
-            "https://newsapi.org/v2/everything",
-            params={
-                "q": query,
-                "sortBy": "publishedAt",
-                "language": "en",
-                "pageSize": 3,
-                "apiKey": NEWSAPI_KEY,
-            },
-            timeout=10,
-        )
-
-        if r.status_code != 200:
-            return []
-
+        r = requests.get("https://newsapi.org/v2/everything",
+                         params={"q": query, "sortBy": "publishedAt", "language": "en", "pageSize": 3,
+                                 "apiKey": NEWSAPI_KEY}, timeout=10)
+        if r.status_code != 200: return []
         articles = r.json().get("articles", [])
-        cleaned = []
-        seen_titles = set()
-
+        cleaned, seen = [], set()
         for a in articles:
             title = (a.get("title") or "").strip()
-            if not title or title in seen_titles:
-                continue
-            seen_titles.add(title)
-            cleaned.append({
-                "title": title,
-                "url": a.get("url", ""),
-                "source": {"name": a.get("source", {}).get("name", "Unknown")},
-                "publishedAt": a.get("publishedAt", ""),
-            })
-
+            if not title or title in seen: continue
+            seen.add(title)
+            ukr_title = translate_to_uk(title)
+            cleaned.append({"title": ukr_title, "url": a.get("url", ""),
+                            "source": {"name": a.get("source", {}).get("name", "Unknown")},
+                            "publishedAt": a.get("publishedAt", "")})
         return cleaned
     except Exception:
         return []
 
 
 def stream_ollama(prompt: str):
-    # Тепер ми використовуємо хмарний Groq замість локальної Ollama
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+    # ФІКС Groq API з .strip() для ключів
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "").strip()
     if not GROQ_API_KEY:
         yield "⚠️ Ключ GROQ_API_KEY не знайдено! Додай його у Secrets на Streamlit Cloud."
         return
 
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "gemma2-9b-it",  # Офіційна хмарна Gemma 2
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "stream": True
-    }
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    data = {"model": MODEL_NAME, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True}
 
     try:
-        with requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True,
-                           timeout=30) as r:
-            r.raise_for_status()
-            for line in r.iter_lines():
-                if line:
-                    decoded_line = line.decode("utf-8")
-                    if decoded_line.startswith("data: "):
-                        if decoded_line == "data: [DONE]":
-                            break
-                        try:
-                            chunk = json.loads(decoded_line[6:])
-                            delta = chunk["choices"][0]["delta"].get("content", "")
-                            if delta:
-                                yield delta
-                        except:
-                            pass
+        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True,
+                            timeout=30)
+
+        # Обробка помилки 400
+        if res.status_code != 200:
+            yield f"⚠️ Помилка Groq API (Код {res.status_code}): {res.text}"
+            return
+
+        for line in res.iter_lines():
+            if line:
+                decoded_line = line.decode("utf-8")
+                if decoded_line.startswith("data: "):
+                    if decoded_line == "data: [DONE]": break
+                    try:
+                        chunk = json.loads(decoded_line[6:])
+                        delta = chunk["choices"][0]["delta"].get("content", "")
+                        if delta: yield delta
+                    except:
+                        pass
     except Exception as e:
-        yield f"⚠️ Помилка з'єднання з хмарним AI: {e}"
+        yield f"⚠️ Технічна помилка: {e}"
 
-def build_analysis_prompt(name: str, symbol: str, price: float, change_24h: float,
-                          change_7d: float, cap: float, vol: float, ath: float,
-                          low_24h: float, high_24h: float, spark_info: str, news: list[dict]) -> str:
+
+def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
+                          news):
     news_text = "Актуальні новини по монеті:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]
-    ) if news else "Специфічних новин зараз немає."
-
+        [f"- {n.get('title')}" for n in news]) if news else "Специфічних новин зараз немає."
     return f"""Ти — Міша, фінансовий AI-асистент. Пиши чистою українською.
 Проаналізуй {name} ({symbol}) на основі цих даних:
 - Ціна: {fmt_price(price)}
@@ -609,16 +503,11 @@ def build_analysis_prompt(name: str, symbol: str, price: float, change_24h: floa
 
 
 def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news, history, user_q):
-    history_text = ""
-    for msg in history[-6:]:
-        role = "Користувач" if msg["role"] == "user" else "Ти (Міша)"
-        clean_content = msg["content"].replace("\n", " ")
-        history_text += f"{role}: {clean_content}\n"
-
+    history_text = "\n".join(
+        [f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in
+         history[-6:]])
     news_text = "Останні заголовки новин:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]
-    ) if news else "Немає свіжих новин."
-
+        [f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
     return f"""Ти — Міша (CryptoMisha AI), дружній AI-співрозмовник.
 Відповідай чистою українською.
 
@@ -635,17 +524,9 @@ def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news
 Твоя відповідь:"""
 
 
-for key, default in [
-    ("messages", []),
-    ("current_coin", None),
-    ("coin_data", None),
-    ("coin_prices", []),
-    ("cg_name", None),
-    ("generate_new", False),
-    ("selected_interval", "4h"),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []),
+                     ("cg_name", None), ("generate_new", False), ("selected_interval", "4h")]:
+    if key not in st.session_state: st.session_state[key] = default
 
 
 def handle_chat_submit():
@@ -657,34 +538,18 @@ def handle_chat_submit():
 
 
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
-st.markdown(
-    #Binance + CoinGecko + NewsAPI + Local Ollama
-    f'<div class="hero-sub"></div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="hero-sub">// Binance + CoinGecko + NewsAPI + Groq AI (Gemma 2)</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
-
 with col1:
     tickers_list = get_binance_tickers()
-    raw_selection = st.selectbox(
-        "Пошук монети",
-        options=tickers_list,
-        index=None,
-        placeholder="🔍 Введи назву або тікер (наприклад: bitc, sol, PEPE...)",
-        label_visibility="collapsed"
-    )
+    raw_selection = st.selectbox("Пошук монети", options=tickers_list, index=None,
+                                 placeholder="🔍 Введи назву або тікер (наприклад: bitc, sol, PEPE...)",
+                                 label_visibility="collapsed")
     user_ticker = raw_selection.split(" ")[0] if raw_selection else ""
-
 with col2:
-    tf_label = st.selectbox(
-        "Таймфрейм",
-        options=list(TIMEFRAME_OPTIONS.keys()),
-        index=1,
-        label_visibility="collapsed",
-    )
+    tf_label = st.selectbox("Таймфрейм", options=list(TIMEFRAME_OPTIONS.keys()), index=1, label_visibility="collapsed")
     selected_interval = TIMEFRAME_OPTIONS[tf_label]
-
 with col3:
     analyze_btn = st.button("⚡ Аналізувати", use_container_width=True)
 
@@ -692,23 +557,19 @@ if user_ticker and (
         analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get('ml_result'))):
     if analyze_btn or st.session_state.current_coin != user_ticker:
         with st.spinner(f"Шукаю {user_ticker} на біржах..."):
-
             cg_id, cg_name = search_coingecko_id(user_ticker)
-
             if cg_id:
                 data = get_coin_data(cg_id)
                 prices = get_sparkline(cg_id)
             else:
-                data = None
+                data = None;
                 prices = []
                 st.warning(
                     f"⚠️ Не знайшов графіків для '{user_ticker}' на CoinGecko, але продовжую аналіз через Binance!")
-
             st.session_state.coin_data = data
             st.session_state.current_coin = user_ticker
             st.session_state.coin_prices = prices
             st.session_state.cg_name = cg_name if cg_name else user_ticker
-
             if analyze_btn:
                 st.session_state.messages = []
                 st.session_state.generate_new = False
@@ -741,12 +602,9 @@ if user_ticker and (
             <div class="card-title">{safe_text(display_name)} · #{safe_text(rank)} · {safe_text(user_ticker)}/USD</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
-                <div class="stat-chip"><span class="chip-label">Зміна 1г</span>
-                    <span class="{'change-pos' if change_1h >= 0 else 'change-neg'}">{change_1h:+.2f}%</span></div>
-                <div class="stat-chip"><span class="chip-label">Зміна 24г</span>
-                    <span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
-                <div class="stat-chip"><span class="chip-label">Зміна 7д</span>
-                    <span class="{'change-pos' if change_7d >= 0 else 'change-neg'}">{change_7d:+.2f}%</span></div>
+                <div class="stat-chip"><span class="chip-label">Зміна 1г</span><span class="{'change-pos' if change_1h >= 0 else 'change-neg'}">{change_1h:+.2f}%</span></div>
+                <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
+                <div class="stat-chip"><span class="chip-label">Зміна 7д</span><span class="{'change-pos' if change_7d >= 0 else 'change-neg'}">{change_7d:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">MCap</span><span>{fmt_large(cap)}</span></div>
                 <div class="stat-chip"><span class="chip-label">Обсяг 24г</span><span>{fmt_large(vol)}</span></div>
             </div>
@@ -758,31 +616,13 @@ if user_ticker and (
             pct = ((prices[-1] - prices[0]) / prices[0] * 100) if prices[0] else 0
             spark_info = f"Тижневий тренд: {trend} ({pct:+.1f}% за 7 днів)"
 
-    # Інтерактивний графік TradingView
     tv_interval_map = {"1h": "60", "4h": "240", "1d": "D", "1w": "W", "1M": "M"}
-    tv_interval = tv_interval_map.get(selected_interval, "240")
-
     tv_html = f"""
     <div class="tradingview-widget-container" style="height:100%;width:100%; border-radius:16px; overflow:hidden; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 1.5rem; position: relative; box-shadow: 0 20px 70px rgba(131,72,193,0.10), 0 8px 25px rgba(0,0,0,0.35);">
       <div id="tradingview_misha" style="height:420px;width:100%"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
       <script type="text/javascript">
-      new TradingView.widget({{
-      "autosize": true,
-      "symbol": "BINANCE:{user_ticker}USDT",
-      "interval": "{tv_interval}",
-      "timezone": "Europe/Kyiv",
-      "theme": "dark",
-      "style": "1",
-      "locale": "uk",
-      "enable_publishing": false,
-      "backgroundColor": "#050506",
-      "gridColor": "rgba(255,255,255,0.05)",
-      "hide_top_toolbar": false,
-      "hide_legend": false,
-      "save_image": false,
-      "container_id": "tradingview_misha"
-    }});
+      new TradingView.widget({{"autosize": true, "symbol": "BINANCE:{user_ticker}USDT", "interval": "{tv_interval_map.get(selected_interval, "240")}", "timezone": "Europe/Kyiv", "theme": "dark", "style": "1", "locale": "uk", "enable_publishing": false, "backgroundColor": "#050506", "gridColor": "rgba(255,255,255,0.05)", "hide_top_toolbar": false, "hide_legend": false, "save_image": false, "container_id": "tradingview_misha"}});
       </script>
     </div>
     """
@@ -793,72 +633,44 @@ if user_ticker and (
         st.session_state.ml_result = ml_result
 
     if ml_result.get("status") == "success":
-        if price == 0:
-            price = ml_result.get("price", 0)
-
+        if price == 0: price = ml_result.get("price", 0)
         signal_class, signal_border = get_signal_style(ml_result["signal"])
-
         rsi_val = ml_result.get("rsi")
         rsi_c = rsi_color(rsi_val) if isinstance(rsi_val, (int, float)) else "#e2e8f0"
-
         bb_pct = ml_result.get("bb_percent")
-        if isinstance(bb_pct, (int, float)):
-            bb_label = "перекуп." if bb_pct > 80 else ("перепрод." if bb_pct < 20 else "норма")
-            bb_text = f"{bb_pct}% ({bb_label})"
-        else:
-            bb_text = "—"
-
+        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(
+            bb_pct, (int, float)) else "—"
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
-
-        extra_metrics = (
-            f"&nbsp;·&nbsp; <span data-tooltip='Відсоток: скільки з передбачених сигналів реально справдились'>Precision: <b>{ml_result.get('precision', '—')}%</b></span> "
-            f"&nbsp;·&nbsp; <span data-tooltip='Відсоток: скільки реальних рухів ринку модель змогла зловити'>Recall: <b>{ml_result.get('recall', '—')}%</b></span> "
-            f"&nbsp;·&nbsp; <span data-tooltip='Збалансована оцінка між Precision та Recall'>F1: <b>{ml_result.get('f1_score', '—')}%</b></span>"
-        )
-
-        raw_prediction_html = ""
-        if ml_result.get("signal") == "NO TRADE ⚪" and ml_result.get("raw_prediction"):
-            raw_prediction_html = f'<div class="ml-acc">Сирий прогноз: <b>{ml_result["raw_prediction"]}</b> &nbsp;·&nbsp; Режим: <b>{ml_result.get("mode", "—")}</b></div>'
-
-        sltp_html = ""
-        if ml_result.get("stop_loss") is not None and ml_result.get("take_profit") is not None:
-            sltp_html = f'<div class="ml-acc"><span data-tooltip="Stop Loss: Ціна, де угода автоматично закриється в мінус, щоб не втратити більше">SL: <b>{safe_price(ml_result["stop_loss"])}</b></span> &nbsp;·&nbsp; <span data-tooltip="Take Profit: Ціна, де угода автоматично закриється в плюс, щоб зафіксувати прибуток">TP: <b>{safe_price(ml_result["take_profit"])}</b></span> &nbsp;·&nbsp; <span data-tooltip="Співвідношення Ризик/Прибуток. 2.0 означає, що потенційний плюс вдвічі більший за можливий мінус">R/R: <b>{ml_result.get("risk_reward", "—")}</b></span></div>'
+        extra_metrics = f"&nbsp;·&nbsp; <span data-tooltip='Відсоток: скільки з передбачених сигналів реально справдились'>Precision: <b>{ml_result.get('precision', '—')}%</b></span> &nbsp;·&nbsp; <span data-tooltip='Відсоток: скільки реальних рухів ринку модель змогла зловити'>Recall: <b>{ml_result.get('recall', '—')}%</b></span> &nbsp;·&nbsp; <span data-tooltip='Збалансована оцінка між Precision та Recall'>F1: <b>{ml_result.get('f1_score', '—')}%</b></span>"
+        raw_prediction_html = f'<div class="ml-acc">Сирий прогноз: <b>{ml_result["raw_prediction"]}</b> &nbsp;·&nbsp; Режим: <b>{ml_result.get("mode", "—")}</b></div>' if ml_result.get(
+            "signal") == "NO TRADE ⚪" and ml_result.get("raw_prediction") else ""
+        sltp_html = f'<div class="ml-acc"><span data-tooltip="Stop Loss: Ціна, де угода закриється в мінус">SL: <b>{safe_price(ml_result["stop_loss"])}</b></span> &nbsp;·&nbsp; <span data-tooltip="Take Profit: Ціна, де угода закриється в плюс">TP: <b>{safe_price(ml_result["take_profit"])}</b></span> &nbsp;·&nbsp; <span data-tooltip="Співвідношення Ризик/Прибуток">R/R: <b>{ml_result.get("risk_reward", "—")}</b></span></div>' if ml_result.get(
+            "stop_loss") is not None and ml_result.get("take_profit") is not None else ""
 
         st.markdown(f"""
 <div class="ml-card" style="border-color: {signal_border};">
-<div style="font-family:'Space Mono',monospace; font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:.5rem;">
-⚙️ AI Прогноз · Binance · XGBoost · {safe_text(tf_label)}
-</div>
-<div class="{signal_class}">
-{safe_text(ml_result['signal'])}
-<span class="ml-conf" data-tooltip="Наскільки математично модель впевнена у цьому прогнозі">&nbsp;{ml_result.get('confidence', '—')}% впевненості</span>
-</div>
+<div style="font-family:'Space Mono',monospace; font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:.5rem;">⚙️ AI Прогноз · Binance · XGBoost · {safe_text(tf_label)}</div>
+<div class="{signal_class}">{safe_text(ml_result['signal'])}<span class="ml-conf" data-tooltip="Математична впевненість моделі">&nbsp;{ml_result.get('confidence', '—')}% впевненості</span></div>
 <div class="ml-indicators">
-<div class="ml-chip" data-tooltip="RSI (Індекс відносної сили). Показує, чи монета перекуплена (>70) або перепродана (<30)"><span class="ml-chip-label">RSI</span><span style="color:{rsi_c}">{safe_text(rsi_val)}</span></div>
-<div class="ml-chip" data-tooltip="EMA20. Короткостроковий тренд: середня ціна за останні 20 свічок з акцентом на нові дані"><span class="ml-chip-label">EMA20</span><span>{safe_price(ml_result.get('ema20'))}</span></div>
-<div class="ml-chip" data-tooltip="EMA50. Середньостроковий тренд: середня ціна за останні 50 свічок"><span class="ml-chip-label">EMA50</span><span>{safe_price(ml_result.get('ema50'))}</span></div>
-<div class="ml-chip" data-tooltip="Смуги Боллінджера (%). Показує, де знаходиться ціна відносно своєї нормальної волатильності"><span class="ml-chip-label">BB%</span><span>{safe_text(bb_text)}</span></div>
-<div class="ml-chip" data-tooltip="Стохастик. Показує імпульс ціни. Ближче до 0 — перепродано, до 100 — перекуплено"><span class="ml-chip-label">Stoch</span><span>{safe_text(ml_result.get('stoch_k'))}</span></div>
-<div class="ml-chip" data-tooltip="ATR (Середній істинний діапазон). Показує поточну волатильність — наскільки сильно скаче ціна"><span class="ml-chip-label">ATR</span><span>{safe_text(ml_result.get('atr_pct'))}%</span></div>
-<div class="ml-chip" data-tooltip="OBV (Балансовий обсяг). Показує, куди йдуть гроші (накопичення чи розпродаж) на основі обсягів"><span class="ml-chip-label">OBV</span><span>{obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
+<div class="ml-chip" data-tooltip="RSI (Індекс відносної сили)"><span class="ml-chip-label">RSI</span><span style="color:{rsi_c}">{safe_text(rsi_val)}</span></div>
+<div class="ml-chip" data-tooltip="EMA20. Короткостроковий тренд"><span class="ml-chip-label">EMA20</span><span>{safe_price(ml_result.get('ema20'))}</span></div>
+<div class="ml-chip" data-tooltip="EMA50. Середньостроковий тренд"><span class="ml-chip-label">EMA50</span><span>{safe_price(ml_result.get('ema50'))}</span></div>
+<div class="ml-chip" data-tooltip="Смуги Боллінджера (%)"><span class="ml-chip-label">BB%</span><span>{safe_text(bb_text)}</span></div>
+<div class="ml-chip" data-tooltip="Стохастик. Показує імпульс ціни"><span class="ml-chip-label">Stoch</span><span>{safe_text(ml_result.get('stoch_k'))}</span></div>
+<div class="ml-chip" data-tooltip="ATR (Середній істинний діапазон)"><span class="ml-chip-label">ATR</span><span>{safe_text(ml_result.get('atr_pct'))}%</span></div>
+<div class="ml-chip" data-tooltip="OBV (Балансовий обсяг)"><span class="ml-chip-label">OBV</span><span>{obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
 </div>
-<div class="ml-acc">
-<span data-tooltip="Відсоток правильних прогнозів моделі загалом на крос-валідації">📊 Accuracy (TimeSeriesSplit CV): <b>{ml_result.get('accuracy', '—')}%</b></span> {extra_metrics} &nbsp;·&nbsp; ⚠️ Не є фінансовою порадою
-</div>
-{raw_prediction_html}
-{sltp_html}
+<div class="ml-acc"><span data-tooltip="Відсоток правильних прогнозів моделі загалом">📊 Accuracy (CV): <b>{ml_result.get('accuracy', '—')}%</b></span> {extra_metrics} &nbsp;·&nbsp; ⚠️ Не є фінансовою порадою</div>
+{raw_prediction_html}{sltp_html}
 </div>
 """, unsafe_allow_html=True)
 
         if ml_result.get("top_features"):
             top_feats = ", ".join(
-                [f"{f['feature']} ({round(f['importance'] * 100, 1)}%)" for f in ml_result["top_features"][:5]]
-            )
+                [f"{f['feature']} ({round(f['importance'] * 100, 1)}%)" for f in ml_result["top_features"][:5]])
             st.markdown(
-                f'<div class="hint"><span data-tooltip="Дані та індикатори, які мали найбільший вплив на рішення штучного інтелекту">Найважливіші фічі моделі: {safe_text(top_feats)}</span></div>',
-                unsafe_allow_html=True
-            )
-
+                f'<div class="hint"><span data-tooltip="Дані та індикатори, які мали найбільший вплив на рішення">Найважливіші фічі моделі: {safe_text(top_feats)}</span></div>',
+                unsafe_allow_html=True)
     else:
         st.error(f"❌ ML прогноз недоступний: {ml_result.get('reason', 'невідома причина')}")
 
@@ -867,25 +679,14 @@ if user_ticker and (
     with st.spinner("Шукаю свіжі інсайди..."):
         news_articles = get_crypto_news(display_name, user_ticker)
 
-    st.markdown('<div class="card-title" style="margin-top: 1.5rem;">📰 Останні новини</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="card-title" style="margin-top: 1.5rem;">📰 Останні новини</div>', unsafe_allow_html=True)
 
     if news_articles:
         for article in news_articles:
-            pub_date = safe_text((article.get("publishedAt") or "")[:10])
-            source = safe_text(article.get("source", {}).get("name", "Unknown"))
-            title = safe_text(article.get("title", "Без заголовку"))
-            url = safe_url(article.get("url", "#"))
-
             st.markdown(f"""
             <div class="news-card">
-                <div class="news-title">
-                    <a href="{url}" target="_blank" rel="noopener noreferrer">{title}</a>
-                </div>
-                <div class="news-meta">
-                    <span>Джерело: {source}</span>
-                    <span>{pub_date}</span>
-                </div>
+                <div class="news-title"><a href="{safe_url(article.get('url', '#'))}" target="_blank" rel="noopener noreferrer">{safe_text(article.get('title', 'Без заголовку'))}</a></div>
+                <div class="news-meta"><span>Джерело: {safe_text(article.get('source', {}).get('name', 'Unknown'))}</span><span>{safe_text((article.get('publishedAt') or '')[:10])}</span></div>
             </div>
             """, unsafe_allow_html=True)
     else:
@@ -895,94 +696,53 @@ if user_ticker and (
 
     analysis_key = f"analysis_{user_ticker}"
     if analyze_btn or analysis_key not in st.session_state:
-        prompt = build_analysis_prompt(
-            display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
-            news_articles
-        )
+        prompt = build_analysis_prompt(display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h,
+                                       high_24h, spark_info, news_articles)
         analysis_placeholder = st.empty()
-
-        analysis_placeholder.markdown(f"""
-        <div class="msg-ai">
-            <div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>
-            <span class="thinking">Міша аналізує графіки та новини... 🤔</span>
-        </div>
-        """, unsafe_allow_html=True)
-
+        analysis_placeholder.markdown(
+            f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div><span class="thinking">Міша аналізує графіки та новини... 🤔</span></div>',
+            unsafe_allow_html=True)
         full_analysis = ""
         for chunk in stream_ollama(prompt):
             full_analysis += chunk
-            analysis_placeholder.markdown(f"""
-            <div class="msg-ai">
-                <div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>
-                {safe_text(full_analysis)}
-            </div>
-            """, unsafe_allow_html=True)
-
+            analysis_placeholder.markdown(
+                f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>{safe_text(full_analysis)}</div>',
+                unsafe_allow_html=True)
         st.session_state[analysis_key] = full_analysis
-        st.session_state.messages = [{
-            "role": "ai",
-            "content": full_analysis,
-            "label": f"📊 Аналіз {display_name}"
-        }]
+        st.session_state.messages = [{"role": "ai", "content": full_analysis, "label": f"📊 Аналіз {display_name}"}]
         st.rerun()
 
     for msg in st.session_state.messages:
         if msg["role"] == "ai":
-            st.markdown(f"""
-            <div class="msg-ai">
-                <div class="msg-label msg-label-ai">⬡ Міша · {safe_text(msg.get('label', 'Відповідь'))}</div>
-                {safe_text(msg['content'])}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · {safe_text(msg.get("label", "Відповідь"))}</div>{safe_text(msg["content"])}</div>',
+                unsafe_allow_html=True)
         else:
-            st.markdown(f"""
-            <div class="msg-user">
-                <div class="msg-label msg-label-user">▸ Ти</div>
-                {safe_text(msg['content'])}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="msg-user"><div class="msg-label msg-label-user">▸ Ти</div>{safe_text(msg["content"])}</div>',
+                unsafe_allow_html=True)
 
     if st.session_state.generate_new:
-        last_user_q = st.session_state.messages[-1]["content"]
-        chat_prompt = build_chat_prompt(
-            display_name, user_ticker, price, change_24h, cap, vol, change_7d, news_articles,
-            st.session_state.messages[:-1], last_user_q
-        )
-
+        chat_prompt = build_chat_prompt(display_name, user_ticker, price, change_24h, cap, vol, change_7d,
+                                        news_articles, st.session_state.messages[:-1],
+                                        st.session_state.messages[-1]["content"])
         chat_placeholder = st.empty()
-        chat_placeholder.markdown(f"""
-        <div class="msg-ai">
-            <div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>
-            <span class="thinking">Міша думає... 🤔</span>
-        </div>
-        """, unsafe_allow_html=True)
-
+        chat_placeholder.markdown(
+            '<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div><span class="thinking">Міша думає... 🤔</span></div>',
+            unsafe_allow_html=True)
         full_answer = ""
         for chunk in stream_ollama(chat_prompt):
             full_answer += chunk
-            chat_placeholder.markdown(f"""
-            <div class="msg-ai">
-                <div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>
-                {safe_text(full_answer)}
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.session_state.messages.append({
-            "role": "ai",
-            "content": full_answer,
-            "label": "Відповідь"
-        })
+            chat_placeholder.markdown(
+                f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>{safe_text(full_answer)}</div>',
+                unsafe_allow_html=True)
+        st.session_state.messages.append({"role": "ai", "content": full_answer, "label": "Відповідь"})
         st.session_state.generate_new = False
         st.rerun()
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
-    st.text_input(
-        "Питання",
-        placeholder="Напиши щось Міші...",
-        key="chat_input_widget",
-        on_change=handle_chat_submit,
-        label_visibility="collapsed",
-    )
+    st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit,
+                  label_visibility="collapsed")
     st.markdown('<div class="hint" style="cursor: default;">↵ Enter — надіслати повідомлення</div>',
                 unsafe_allow_html=True)
 
@@ -990,11 +750,10 @@ if user_ticker and (
     if os.path.exists("predictions_log.csv"):
         with st.expander("📜 Журнал логів (predictions_log.csv)"):
             try:
-                log_df = pd.read_csv("predictions_log.csv")
-                st.dataframe(log_df.tail(10).iloc[::-1], use_container_width=True, hide_index=True)
-            except Exception:
+                st.dataframe(pd.read_csv("predictions_log.csv").tail(10).iloc[::-1], use_container_width=True,
+                             hide_index=True)
+            except:
                 st.write("Не вдалося прочитати файл логів.")
-
 else:
     st.markdown(f"""
     <div class="card" style="text-align:center; padding: 3rem;">
@@ -1006,8 +765,6 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-st.markdown("""
-<div style="text-align:center; color:var(--muted); font-family:'Space Mono',monospace; font-size:.7rem; margin-top:3rem;">
-    ⚠️ Не є фінансовою порадою · Тільки для освітніх цілей
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    """<div style="text-align:center; color:var(--muted); font-family:'Space Mono',monospace; font-size:.7rem; margin-top:3rem;">⚠️ Не є фінансовою порадою · Тільки для освітніх цілей</div>""",
+    unsafe_allow_html=True)

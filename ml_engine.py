@@ -1,9 +1,9 @@
 import os
-import csv
 import json
 import time
 import warnings
 import requests
+import psycopg2
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -13,6 +13,13 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 warnings.filterwarnings("ignore")
+
+# Змінні оточення для підключення до БД
+DB_USER = os.getenv("POSTGRES_USER", "CryptoPulse_admin")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("POSTGRES_DB", "CryptoPulse_db")
 
 BINANCE_SYMBOL_MAP = {
     "MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB",
@@ -28,24 +35,44 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-def log_prediction(data: dict):
-    filename = "predictions_log.csv"
-    file_exists = os.path.isfile(filename)
+def log_prediction_to_db(data: dict):
+    conn = None
+    try:
+        conn = psycopg2.connect(
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            host=DB_HOST,
+            port=DB_PORT
+        )
+        cursor = conn.cursor()
 
-    with open(filename, mode='a', newline='', encoding='utf-8') as f:
-        fieldnames = ['timestamp', 'symbol', 'interval', 'signal', 'price', 'confidence', 'accuracy', 'raw_prediction',
-                      'stop_loss', 'take_profit']
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow({
-            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'symbol': data.get('symbol', ''), 'interval': data.get('interval', ''),
-            'signal': data.get('signal', ''), 'price': data.get('price', ''),
-            'confidence': data.get('confidence', ''), 'accuracy': data.get('accuracy', ''),
-            'raw_prediction': data.get('raw_prediction', ''), 'stop_loss': data.get('stop_loss', ''),
-            'take_profit': data.get('take_profit', '')
-        })
+        query = """
+            INSERT INTO model_predictions 
+            (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        values = (
+            data.get('symbol', ''),
+            data.get('interval', ''),
+            data.get('signal', ''),
+            data.get('price', 0.0),
+            data.get('confidence', 0.0),
+            data.get('accuracy', 0.0),
+            data.get('raw_prediction', ''),
+            data.get('stop_loss', None),
+            data.get('take_profit', None)
+        )
+
+        cursor.execute(query, values)
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        print(f"Помилка запису в БД: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -120,7 +147,6 @@ def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int
                 break
         except Exception:
             break
-
         time.sleep(0.1)
 
     if not all_data: return None
@@ -257,7 +283,8 @@ def choose_n_splits(n_samples: int) -> int:
 
 def get_xgb_params(actual_fetch_interval: str, scale_weight: float) -> dict:
     params = {"tree_method": "hist", "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 2,
-              "scale_pos_weight": scale_weight, "eval_metric": "logloss", "verbosity": 0, "random_state": 42, "n_jobs": -1}
+              "scale_pos_weight": scale_weight, "eval_metric": "logloss", "verbosity": 0, "random_state": 42,
+              "n_jobs": -1}
     if actual_fetch_interval in ["5m", "15m"]:
         params.update({"max_depth": 3, "learning_rate": 0.05, "n_estimators": 100, "gamma": 0.2, "reg_lambda": 2.0,
                        "reg_alpha": 0.5})
@@ -394,7 +421,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "risk_reward": 2.0 if stop_loss is not None and take_profit is not None else None,
         "class_balance": class_balance, "top_features": metrics["top_features"], "features_used": features,
     }
-    log_prediction(result)
+    log_prediction_to_db(result)
     return result
 
 

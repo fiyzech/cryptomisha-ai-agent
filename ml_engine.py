@@ -1,263 +1,161 @@
 import os
-import io
-import pickle
-import warnings
+import re
+import json
+import html
 import requests
 import psycopg2
 import pandas as pd
-import numpy as np
 import streamlit as st
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from xgboost import XGBClassifier
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import streamlit.components.v1 as components
+from ml_engine import get_ml_signal, get_db_connection
 
-warnings.filterwarnings("ignore")
-load_dotenv()
+# Змінні оточення для підключення до БД
+DB_USER = os.getenv("POSTGRES_USER", "CryptoPulse_admin")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("POSTGRES_DB", "CryptoPulse_db")
+
+st.set_page_config(page_title="CryptoMisha AI", page_icon="✦", layout="wide", initial_sidebar_state="collapsed")
+
+COINGECKO_BASE = "https://api.coingecko.com/api/v3"
+MODEL_NAME = "llama-3.3-70b-versatile"
+NEWSAPI_KEY = st.secrets.get("NEWSAPI_KEY", "")
+
+TIMEFRAME_OPTIONS = {"1 година": "1h", "4 години": "4h", "1 день": "1d", "1 тиждень": "1w", "1 місяць": "1M"}
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
+:root { --bg: #010315; --surface: #050506; --border: rgba(255, 255, 255, 0.1); --accent: #C38BFF; --accent2: #8348C1; --text: #FFFFFF; --muted: #A3A4B0; --red: #FF3B30; --green: #00E676; --yellow: #fbbf24; }
+html, body, .stApp, p, div, span, li, a, button, input, select { font-family: 'Montserrat', sans-serif !important; color: var(--text); }
+.stApp { background-color: var(--bg) !important; }
+.hero-title { font-size: 2.8rem; font-weight: 800; color: #FFFFFF; margin-bottom: 0; display: flex; align-items: center; gap: 12px; }
+.hero-title::before { content: '✦'; color: #8348C1; }
+.card, .ml-card, .news-card { background: var(--surface) !important; border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem; position: relative; box-shadow: 0 20px 70px rgba(131,72,193,0.10), 0 8px 25px rgba(0,0,0,0.35); border: 1px solid var(--border); }
+.price-big { font-size: 2.6rem; font-weight: 800; color: var(--green); font-family: 'Space Mono'; }
+.ml-signal-long { color: var(--green) !important; font-size: 1.8rem; font-weight: 800 !important; }
+.ml-signal-short { color: var(--red) !important; font-size: 1.8rem; font-weight: 800 !important; }
+
+/* TOOLTIPS */
+[data-tooltip] { position: relative; cursor: help; }
+[data-tooltip]:hover::after {
+    content: attr(data-tooltip); position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+    background-color: #050506 !important; border: 1px solid #8348C1; color: #FFFFFF; padding: 10px 14px; border-radius: 8px; font-size: 12px; z-index: 99999; width: max-content; max-width: 250px;
+}
+.ml-indicators { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+.ml-chip { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.8rem; font-size: 0.8rem; font-family: 'Space Mono'; }
+.ml-acc { font-size: 0.75rem; color: var(--muted); margin-top: 0.8rem; font-family: 'Space Mono'; }
+.stButton > button { background: linear-gradient(90deg, #2C1969 0%, #8348C1 50%, #C38BFF 100%) !important; color: #FFFFFF !important; border-radius: 28px !important; font-weight: 600 !important; height: 44px !important; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+</style>
+""", unsafe_allow_html=True)
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД (Тільки через secrets для хмари) ---
-def get_db_connection():
+def safe_text(value) -> str: return "—" if value is None else html.escape(str(value)).replace("\n", "<br>")
+
+
+def safe_price(value) -> str:
+    if value is None: return "—"
     try:
-        return psycopg2.connect(
-            dbname=st.secrets["POSTGRES_DB"],
-            user=st.secrets["POSTGRES_USER"],
-            password=st.secrets["POSTGRES_PASSWORD"],
-            host=st.secrets["DB_HOST"],
-            port=st.secrets["DB_PORT"]
-        )
+        v = float(value)
+        return f"${v:,.2f}" if v >= 1 else f"${v:.6f}"
     except:
-        return psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB", "CryptoPulse_db"),
-            user=os.getenv("POSTGRES_USER", "CryptoPulse_admin"),
-            password=os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password"),
-            host=os.getenv("DB_HOST", "localhost"),
-            port=os.getenv("DB_PORT", "5432")
-        )
+        return "—"
 
 
-BINANCE_SYMBOL_MAP = {"MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB", "PEPE": "PEPE", "SUI": "SUI",
-                      "SOL": "SOL", "ETH": "ETH", "BTC": "BTC"}
+@st.cache_data(ttl=86400)
+def get_binance_tickers():
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/coins/markets",
+                         params={"vs_currency": "usd", "order": "market_cap_desc", "per_page": 150, "page": 1})
+        cg = {c['symbol'].upper(): c['name'] for c in r.json()}
+        b = requests.get("https://api.binance.com/api/v3/exchangeInfo")
+        valid = [f"{s['baseAsset']} ({cg[s['baseAsset']]})" for s in b.json()['symbols'] if
+                 s['quoteAsset'] == 'USDT' and s['baseAsset'] in cg]
+        return valid[:125]
+    except:
+        return ["BTC (Bitcoin)", "ETH (Ethereum)", "SOL (Solana)"]
 
 
-# --- МАТЕМАТИКА ТА ІНДИКАТОРИ ---
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1 / period, adjust=False).mean()
-    rs = gain / loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+def get_crypto_news(coin_name, symbol):
+    if not NEWSAPI_KEY: return []
+    try:
+        r = requests.get("https://newsapi.org/v2/everything",
+                         params={"q": f'"{coin_name}" OR "{symbol}" crypto', "pageSize": 3, "apiKey": NEWSAPI_KEY})
+        return r.json().get("articles", [])
+    except:
+        return []
 
 
-def add_core_features(df):
-    df = df.copy()
-    # Залізобетонний фікс для назв колонок (щоб не було KeyError)
-    if "h" in df.columns:
-        df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
+st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div style="color:var(--muted); margin-bottom: 2rem;">// Потужний ML-аналіз та XGBoost прогнозування</div>',
+    unsafe_allow_html=True)
 
-    df["RSI"] = calculate_rsi(df["close"])
-    df["RSI_slope"] = df["RSI"].diff(3)
-    macd = df["close"].ewm(span=12).mean() - df["close"].ewm(span=26).mean()
-    df["MACD_hist"] = macd - macd.ewm(span=9).mean()
-    df["EMA_20"] = df["close"].ewm(span=20).mean()
-    df["EMA_50"] = df["close"].ewm(span=50).mean()
-    df["EMA_cross"] = df["EMA_20"] - df["EMA_50"]
+col1, col2, col3 = st.columns([3, 1, 1])
+with col1: user_selection = st.selectbox("Монета", options=get_binance_tickers(), index=None, placeholder="🔍 Пошук...")
+with col2: tf_label = st.selectbox("Таймфрейм", options=list(TIMEFRAME_OPTIONS.keys()), index=1)
+with col3: analyze_btn = st.button("⚡ Аналізувати")
 
-    std = df["close"].rolling(20).std()
-    sma = df["close"].rolling(20).mean()
-    df["BB_pct"] = (df["close"] - (sma - 2 * std)) / (4 * std).replace(0, np.nan)
+if user_selection and analyze_btn:
+    ticker = user_selection.split(" ")[0]
+    interval = TIMEFRAME_OPTIONS[tf_label]
 
-    df["OBV"] = (np.where(df["close"] > df["close"].shift(), df["vol"],
-                          np.where(df["close"] < df["close"].shift(), -df["vol"], 0))).cumsum()
-    df["OBV_sig"] = df["OBV"] - df["OBV"].ewm(span=20).mean()
+    with st.spinner(f"🧠 Міша аналізує {ticker}..."):
+        res = get_ml_signal(ticker, interval)
 
-    tr = pd.concat(
-        [df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()],
-        axis=1).max(axis=1)
-    df["ATR"] = tr.rolling(14).mean()
-    df["ATR_pct"] = (df["ATR"] / df["close"]) * 100
+    if res["status"] == "success":
+        st.markdown(f"""
+        <div class="card">
+            <div style="color:var(--muted); font-size:0.8rem; margin-bottom:0.5rem;">АКТУАЛЬНА ЦІНА · {ticker}/USD</div>
+            <div class="price-big">{safe_price(res['price'])}</div>
+        </div>
 
-    for c in ["RSI", "MACD_hist", "BB_pct", "EMA_cross"]:
-        df[f"{c}_lag1"], df[f"{c}_lag2"] = df[c].shift(1), df[c].shift(2)
-    return df
+        <div class="ml-card">
+            <div style="font-family:'Space Mono'; font-size:.75rem; color:var(--muted); text-transform:uppercase;">⚙️ AI ПРОГНОЗ · XGBOOST · {tf_label.upper()}</div>
+            <div class="{'ml-signal-long' if 'LONG' in res['signal'] else 'ml-signal-short'}">{res['signal']} <span style="font-size:1.2rem; color:var(--muted); font-weight:400;">{res['confidence']}% впевненості</span></div>
 
+            <div class="ml-indicators">
+                <div class="ml-chip" data-tooltip="RSI: Показує силу тренду. >70 - перекуплено, <30 - перепродано.">RSI {res['rsi']}</div>
+                <div class="ml-chip" data-tooltip="EMA20: Середня ціна. Якщо ціна вище - тренд вгору.">EMA20 {safe_price(res['ema20'])}</div>
+                <div class="ml-chip" data-tooltip="BB%: Положення ціни відносно волатильності.">BB% {res['bb_percent']}%</div>
+                <div class="ml-chip" data-tooltip="OBV VOLUME: Тиск покупців/продавців.">OBV {'🟢' if res['obv_trend'] == '↑' else '🔴'} {res['obv_trend']}</div>
+            </div>
 
-def get_aux_intervals(base):
-    return {"1h": ["15m", "4h"], "4h": ["1h", "1d"], "1d": ["4h", "1w"]}.get(base, ["1h"])
+            <div class="ml-acc">
+                📊 Accuracy (CV): <b>{res['accuracy']}%</b> &nbsp;·&nbsp; Precision: <b>{res.get('precision', '—')}%</b> &nbsp;·&nbsp; Recall: <b>{res.get('recall', '—')}%</b> &nbsp;·&nbsp; F1: <b>{res.get('f1_score', '—')}%</b>
+            </div>
+            <div class="ml-acc" style="margin-top:5px;">
+                SL: <b style="color:var(--red)">{safe_price(res['stop_loss'])}</b> &nbsp;·&nbsp; TP: <b style="color:var(--green)">{safe_price(res['take_profit'])}</b>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
+        components.html(f"""
+            <div id="tv_chart" style="height:400px; border-radius:16px; overflow:hidden; border: 1px solid rgba(255,255,255,0.1);"></div>
+            <script src="https://s3.tradingview.com/tv.js"></script>
+            <script>new TradingView.widget({{"autosize":true,"symbol":"BINANCE:{ticker}USDT","interval":"{{"1h":"60","4h":"240","1d":"D"}.get(interval,"240")}","theme":"dark","style":"1","locale":"uk","container_id":"tv_chart"}});</script>
+        """, height=400)
 
-def merge_multi_timeframe(df, symbol, base_interval):
-    for aux in get_aux_intervals(base_interval):
-        try:
-            res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                               params={"symbol": f"{symbol}USDT", "interval": aux, "limit": 400}, timeout=5)
-            if res.status_code == 200:
-                aux_df = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
-                aux_df.columns = ["ts", "open", "high", "low", "close", "vol"]
-                aux_df = add_core_features(aux_df)
-                keep = ["ts", "RSI", "MACD_hist", "EMA_cross", "BB_pct", "ATR_pct"]
-                aux_df = aux_df[keep].rename(columns=lambda x: f"{aux}_{x}" if x != "ts" else x)
-                aux_df["ts"] = pd.to_datetime(aux_df["ts"], unit="ms")
-                df = pd.merge_asof(df.sort_values("ts"), aux_df.sort_values("ts"), on="ts", direction="backward")
-        except:
-            continue
-    return df
+        # Новини
+        articles = get_crypto_news(user_selection.split("(")[1].replace(")", ""), ticker)
+        if articles:
+            st.markdown('<hr class="divider">', unsafe_allow_html=True)
+            st.markdown("### 📰 Останні новини")
+            for a in articles:
+                st.markdown(
+                    f'<div class="news-card"><a href="{a["url"]}" target="_blank" style="text-decoration:none; font-weight:600;">{a["title"]}</a><br><small style="color:var(--muted);">{a["source"]["name"]}</small></div>',
+                    unsafe_allow_html=True)
 
-
-# --- ЗБЕРЕЖЕННЯ МОДЕЛЕЙ В Supabase (Чіназес логіка) ---
-
-def save_model_to_db(symbol, interval, model, accuracy, features, metrics):
+# Журнал з бази
+with st.expander("📜 Журнал логів з БД (Supabase)"):
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        model_bytes = pickle.dumps(model)
-        cur.execute("""
-            INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            ON CONFLICT (symbol, interval) 
-            DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, 
-                          features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP
-        """, (symbol, interval, psycopg2.Binary(model_bytes), accuracy, features))
-        # Зберігаємо також метрики в JSON (якщо хочеш) - але поки accuracy вистачить
-        conn.commit();
-        cur.close();
+        df = pd.read_sql_query(
+            "SELECT symbol, interval, signal, price, confidence, accuracy, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10",
+            conn)
+        st.dataframe(df, use_container_width=True, hide_index=True)
         conn.close()
     except Exception as e:
-        print(f"DB Model Save Error: {e}")
-
-
-def load_model_from_db(symbol, interval):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT model_binary, accuracy, features, trained_at FROM ml_models WHERE symbol = %s AND interval = %s",
-            (symbol, interval))
-        row = cur.fetchone();
-        cur.close();
-        conn.close()
-        if row and (datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7)):
-            return pickle.loads(row[0]), row[1], row[2]
-    except:
-        pass
-    return None
-
-
-# --- ТРЕНУВАННЯ ---
-def train_intelligent_model(symbol, interval, fut_bars, atr_m):
-    res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                       params={"symbol": f"{symbol}USDT", "interval": interval, "limit": 1500})
-    if res.status_code != 200: return None, 0, "Binance Error"
-
-    df = pd.DataFrame(res.json(), columns=["ts", "o", "h", "l", "c", "v", "ct", "qv", "nt", "tb", "tg", "i"]).iloc[
-        :, :6].astype(float)
-    df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-
-    df = add_core_features(df)
-    df = merge_multi_timeframe(df, symbol, interval)
-
-    features = [c for c in df.columns if c not in ["ts", "open", "high", "low", "close", "vol", "ATR"]]
-    df["target"] = np.where(df["close"].shift(-fut_bars) > df["close"] * (1 + (df["ATR_pct"] * atr_m / 100)), 1,
-                            np.where(df["close"].shift(-fut_bars) < df["close"] * (1 - (df["ATR_pct"] * atr_m / 100)),
-                                     0, np.nan))
-
-    df = df.ffill().fillna(0)
-    df_c = df.dropna(subset=["target"]).copy()
-    if len(df_c) < 150: return None, 0, "Not enough data"
-
-    X, y = df_c[features].values, df_c["target"].astype(int).values
-
-    # Крос-валідація для отримання реальних метрик
-    tscv = TimeSeriesSplit(n_splits=3)
-    m_acc, m_pre, m_rec, m_f1 = [], [], [], []
-
-    for tr_idx, val_idx in tscv.split(X):
-        tmp_m = XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.05, verbosity=0)
-        tmp_m.fit(X[tr_idx], y[tr_idx])
-        p = tmp_m.predict(X[val_idx])
-        m_acc.append(accuracy_score(y[val_idx], p))
-        m_pre.append(precision_score(y[val_idx], p, zero_division=0))
-        m_rec.append(recall_score(y[val_idx], p, zero_division=0))
-        m_f1.append(f1_score(y[val_idx], p, zero_division=0))
-
-    final_model = XGBClassifier(n_estimators=150, max_depth=5, learning_rate=0.03, verbosity=0)
-    final_model.fit(X, y)
-
-    metrics = {
-        "accuracy": round(np.mean(m_acc) * 100, 1),
-        "precision": round(np.mean(m_pre) * 100, 1),
-        "recall": round(np.mean(m_rec) * 100, 1),
-        "f1": round(np.mean(m_f1) * 100, 1),
-        "features": features
-    }
-
-    save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
-    return final_model, metrics, features
-
-
-# --- ГОЛОВНА ФУНКЦІЯ (ПОВНИЙ ВИВІД) ---
-def get_ml_signal(symbol, interval="4h"):
-    bin_sym = BINANCE_SYMBOL_MAP.get(symbol.upper(), symbol.upper())
-    mapping = {"1h": ("1h", 6, 0.5), "4h": ("4h", 8, 0.5), "1d": ("1d", 12, 0.5)}
-    act_tf, fut_bars, atr_m = mapping.get(interval, ("4h", 8, 0.5))
-
-    cached = load_model_from_db(bin_sym, interval)
-    if cached:
-        model, acc, features = cached
-        metrics = {"accuracy": acc, "precision": acc - 2.1, "recall": acc - 1.5, "f1": acc - 1.8}  # Фолбек метрик
-    else:
-        model, metrics, features = train_intelligent_model(bin_sym, act_tf, fut_bars, atr_m)
-        if not model: return {"status": "error", "reason": metrics}
-
-    # Поточні дані
-    res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                       params={"symbol": f"{bin_sym}USDT", "interval": act_tf, "limit": 200})
-    df_now = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
-    df_now.columns = ["ts", "open", "high", "low", "close", "vol"]
-    df_now["ts"] = pd.to_datetime(df_now["ts"], unit="ms")
-    df_now = add_core_features(df_now)
-    df_now = merge_multi_timeframe(df_now, bin_sym, act_tf)
-
-    for f in features:
-        if f not in df_now.columns: df_now[f] = 0
-
-    X_now = df_now[features].iloc[-1:].fillna(0).values
-    pred = int(model.predict(X_now)[0])
-    prob = round(float(model.predict_proba(X_now)[0][pred]) * 100, 1)
-
-    last = df_now.iloc[-1]
-    price = last["close"]
-    atr = last["ATR"]
-
-    # Розрахунок SL/TP
-    dist_sl = atr * 1.5
-    dist_tp = atr * 3.0
-    sl = price - dist_sl if pred == 1 else price + dist_sl
-    tp = price + dist_tp if pred == 1 else price - dist_tp
-
-    signal = "LONG 🟢" if pred == 1 else "SHORT 🔴"
-
-    # ЗАПИС В БД (LOGS)
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO model_predictions (symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (symbol.upper(), interval, signal, price, prob, metrics["accuracy"], sl, tp))
-        conn.commit();
-        cur.close();
-        conn.close()
-    except:
-        pass
-
-    return {
-        "status": "success", "symbol": symbol.upper(), "interval": interval, "signal": signal,
-        "confidence": prob, "accuracy": metrics["accuracy"], "precision": metrics["precision"],
-        "recall": metrics["recall"], "f1_score": metrics["f1"], "price": price,
-        "rsi": round(last["RSI"], 1), "ema20": last["EMA_20"],
-        "bb_percent": round(last["BB_pct"] * 100, 1), "obv_trend": "↑" if last["OBV_sig"] > 0 else "↓",
-        "stop_loss": sl, "take_profit": tp, "raw_prediction": "LONG" if pred == 1 else "SHORT"
-    }
+        st.write(f"Помилка БД: {e}")

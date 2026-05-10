@@ -7,6 +7,7 @@ import psycopg2
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from dotenv import load_dotenv
 
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
@@ -14,12 +15,15 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 warnings.filterwarnings("ignore")
 
+# Завантажуємо локальний .env
+load_dotenv()
+
 # Змінні оточення для підключення до БД
-DB_USER = os.getenv("POSTGRES_USER", "CryptoPulse_admin")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "CryptoPulse_db")
+DB_USER = os.getenv("POSTGRES_USER")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("POSTGRES_DB")
 
 BINANCE_SYMBOL_MAP = {
     "MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB",
@@ -33,7 +37,6 @@ BINANCE_SYMBOL_MAP = {
     "AVAX": "AVAX", "UNI": "UNI", "SOL": "SOL", "BNB": "BNB", "ETH": "ETH",
     "BTC": "BTC", "XRP": "XRP",
 }
-
 
 def log_prediction_to_db(data: dict):
     conn = None
@@ -74,14 +77,12 @@ def log_prediction_to_db(data: dict):
         if conn is not None:
             conn.close()
 
-
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1 / period, adjust=False).mean()
     rs = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
-
 
 def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
     exp1 = series.ewm(span=fast, adjust=False).mean()
@@ -90,7 +91,6 @@ def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: in
     signal_line = macd.ewm(span=signal, adjust=False).mean()
     histogram = macd - signal_line
     return macd, signal_line, histogram
-
 
 def calculate_bollinger_bands(series: pd.Series, period: int = 20, std: int = 2):
     sma = series.rolling(window=period).mean()
@@ -101,16 +101,13 @@ def calculate_bollinger_bands(series: pd.Series, period: int = 20, std: int = 2)
     percent_b = (series - lower) / (upper - lower).replace(0, np.nan)
     return upper, lower, bandwidth, percent_b
 
-
 def calculate_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     obv = np.where(close > close.shift(), volume, np.where(close < close.shift(), -volume, 0))
     return pd.Series(obv, index=close.index).cumsum()
 
-
 def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
-
 
 def calculate_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, k_period: int = 14, d_period: int = 3):
     lowest_low = low.rolling(window=k_period).min()
@@ -119,10 +116,10 @@ def calculate_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, k_pe
     d = k.rolling(window=d_period).mean()
     return k, d
 
-
-def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 3000):
+# ЗМЕНШЕНО ЛІМІТ З 3000 ДО 1500 ДЛЯ ШВИДКОСТІ
+def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 1500):
     url = "https://data-api.binance.vision/api/v3/klines"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     all_data = []
     end_time = None
@@ -162,17 +159,14 @@ def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int
 
     return df.tail(limit).reset_index(drop=True)
 
-
 def resolve_binance_symbol(symbol: str) -> str:
     sym = symbol.upper().replace("-", "").replace(" ", "")
     return BINANCE_SYMBOL_MAP.get(sym, sym)
-
 
 def get_aux_intervals(base_interval: str):
     mapping = {"5m": ["15m", "1h"], "15m": ["1h", "4h"], "1h": ["4h", "1d"], "4h": ["1d", "1w"], "1d": ["1w", "1M"],
                "1w": ["1M"], "1M": ["1w"]}
     return mapping.get(base_interval, ["1d"])
-
 
 def add_core_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -213,7 +207,6 @@ def add_core_features(df: pd.DataFrame) -> pd.DataFrame:
         df[f"{col}_lag2"] = df[col].shift(2)
     return df
 
-
 def build_aux_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     df = add_core_features(df)
     keep_cols = ["ts", "RSI", "MACD_hist", "EMA_cross", "trend_strength", "price_vs_ema20", "ATR_pct"]
@@ -224,33 +217,25 @@ def build_aux_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
                  "ATR_pct": f"{prefix}_ATR_pct"})
     return aux
 
-
 def merge_multi_timeframe_features(base_df: pd.DataFrame, symbol: str, base_interval: str) -> pd.DataFrame:
     df = base_df.copy()
     aux_intervals = get_aux_intervals(base_interval)
 
     for aux_interval in aux_intervals:
-        aux_raw = fetch_binance_data(f"{symbol}USDT", interval=aux_interval, limit=3000)
+        aux_raw = fetch_binance_data(f"{symbol}USDT", interval=aux_interval, limit=1000) # ЗМЕНШЕНО ДЛЯ ШВИДКОСТІ
         if aux_raw is None or len(aux_raw) < 50: continue
 
         aux = build_aux_features(aux_raw, prefix=aux_interval)
-        if aux_interval.endswith('m'):
-            td = pd.Timedelta(minutes=int(aux_interval[:-1]))
-        elif aux_interval.endswith('h'):
-            td = pd.Timedelta(hours=int(aux_interval[:-1]))
-        elif aux_interval.endswith('d'):
-            td = pd.Timedelta(days=int(aux_interval[:-1]))
-        elif aux_interval.endswith('w'):
-            td = pd.Timedelta(days=7 * int(aux_interval[:-1]))
-        elif aux_interval.endswith('M'):
-            td = pd.Timedelta(days=30 * int(aux_interval[:-1]))
-        else:
-            td = pd.Timedelta(0)
+        if aux_interval.endswith('m'): td = pd.Timedelta(minutes=int(aux_interval[:-1]))
+        elif aux_interval.endswith('h'): td = pd.Timedelta(hours=int(aux_interval[:-1]))
+        elif aux_interval.endswith('d'): td = pd.Timedelta(days=int(aux_interval[:-1]))
+        elif aux_interval.endswith('w'): td = pd.Timedelta(days=7 * int(aux_interval[:-1]))
+        elif aux_interval.endswith('M'): td = pd.Timedelta(days=30 * int(aux_interval[:-1]))
+        else: td = pd.Timedelta(0)
 
         aux['ts'] = aux['ts'] + td
         df = pd.merge_asof(df.sort_values("ts"), aux.sort_values("ts"), on="ts", direction="backward")
     return df
-
 
 def build_feature_list(df: pd.DataFrame):
     features = [
@@ -272,7 +257,6 @@ def build_feature_list(df: pd.DataFrame):
     features += [col for col in mtf_candidates if col in df.columns]
     return features
 
-
 def choose_n_splits(n_samples: int) -> int:
     if n_samples >= 1000: return 7
     if n_samples >= 500: return 5
@@ -280,22 +264,17 @@ def choose_n_splits(n_samples: int) -> int:
     if n_samples >= 120: return 3
     return 2
 
-
 def get_xgb_params(actual_fetch_interval: str, scale_weight: float) -> dict:
     params = {"tree_method": "hist", "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 2,
               "scale_pos_weight": scale_weight, "eval_metric": "logloss", "verbosity": 0, "random_state": 42,
               "n_jobs": -1}
     if actual_fetch_interval in ["5m", "15m"]:
-        params.update({"max_depth": 3, "learning_rate": 0.05, "n_estimators": 100, "gamma": 0.2, "reg_lambda": 2.0,
-                       "reg_alpha": 0.5})
+        params.update({"max_depth": 3, "learning_rate": 0.05, "n_estimators": 100, "gamma": 0.2, "reg_lambda": 2.0, "reg_alpha": 0.5})
     elif actual_fetch_interval in ["1h", "4h"]:
-        params.update({"max_depth": 5, "learning_rate": 0.05, "n_estimators": 150, "gamma": 0.1, "reg_lambda": 1.0,
-                       "reg_alpha": 0.1})
+        params.update({"max_depth": 5, "learning_rate": 0.05, "n_estimators": 150, "gamma": 0.1, "reg_lambda": 1.0, "reg_alpha": 0.1})
     else:
-        params.update({"max_depth": 4, "learning_rate": 0.03, "n_estimators": 200, "gamma": 0.1, "reg_lambda": 1.5,
-                       "reg_alpha": 0.2})
+        params.update({"max_depth": 4, "learning_rate": 0.03, "n_estimators": 200, "gamma": 0.1, "reg_lambda": 1.5, "reg_alpha": 0.2})
     return params
-
 
 def train_and_evaluate(X_train, y_train, X_pred, features, future_bars, actual_fetch_interval):
     n_splits = choose_n_splits(len(X_train))
@@ -330,34 +309,27 @@ def train_and_evaluate(X_train, y_train, X_pred, features, future_bars, actual_f
             "recall": round(float(np.mean(cv_recall)) * 100, 1), "f1_score": round(float(np.mean(cv_f1)) * 100, 1),
             "top_features": top_features}
 
-
 def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.0, min_accuracy: float = 50.1) -> dict:
     binance_sym = resolve_binance_symbol(symbol)
-    if interval == "1M":
-        actual_fetch_interval, future_bars, atr_target_mult = "1w", 4, 0.3
-    elif interval == "1w":
-        actual_fetch_interval, future_bars, atr_target_mult = "1d", 5, 0.4
-    elif interval == "1d":
-        actual_fetch_interval, future_bars, atr_target_mult = "1h", 12, 0.5
-    elif interval == "4h":
-        actual_fetch_interval, future_bars, atr_target_mult = "15m", 8, 0.5
-    elif interval == "1h":
-        actual_fetch_interval, future_bars, atr_target_mult = "5m", 6, 0.5
-    else:
-        actual_fetch_interval, future_bars, atr_target_mult = interval, 3, 0.3
+    if interval == "1M": actual_fetch_interval, future_bars, atr_target_mult = "1w", 4, 0.3
+    elif interval == "1w": actual_fetch_interval, future_bars, atr_target_mult = "1d", 5, 0.4
+    elif interval == "1d": actual_fetch_interval, future_bars, atr_target_mult = "1h", 12, 0.5
+    elif interval == "4h": actual_fetch_interval, future_bars, atr_target_mult = "15m", 8, 0.5
+    elif interval == "1h": actual_fetch_interval, future_bars, atr_target_mult = "5m", 6, 0.5
+    else: actual_fetch_interval, future_bars, atr_target_mult = interval, 3, 0.3
 
-    df = fetch_binance_data(f"{binance_sym}USDT", interval=actual_fetch_interval, limit=3000)
+    df = fetch_binance_data(f"{binance_sym}USDT", interval=actual_fetch_interval, limit=1500)
     min_bars_required = 200
-    if df is None or len(df) < min_bars_required: return {"status": "error",
-                                                          "reason": f"Немає достатньо даних для {symbol} ({binance_sym}) на таймфреймі {actual_fetch_interval} (можливо, блокування Binance)"}
+    if df is None or len(df) < min_bars_required:
+        return {"status": "error", "reason": f"Немає достатньо даних для {symbol} ({binance_sym}) на таймфреймі {actual_fetch_interval}"}
 
     df = add_core_features(df)
     df = merge_multi_timeframe_features(df, binance_sym, actual_fetch_interval)
     features = build_feature_list(df)
 
     last_features_row = df[features].iloc[-1]
-    if last_features_row.isna().any(): return {"status": "error",
-                                               "reason": f"Останній рядок містить NaN у фічах: {last_features_row[last_features_row.isna()].index.tolist()}"}
+    if last_features_row.isna().any():
+        return {"status": "error", "reason": f"Останній рядок містить NaN у фічах: {last_features_row[last_features_row.isna()].index.tolist()}"}
 
     X_pred = last_features_row.values.reshape(1, -1)
     df["future_return"] = df["close"].shift(-future_bars) / df["close"] - 1
@@ -391,10 +363,8 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     actual_tp_dist = min(atr * np.sqrt(future_bars) * 2.0, price * 0.12)
 
     stop_loss, take_profit = None, None
-    if final_signal == "LONG 🟢":
-        stop_loss, take_profit = price - actual_sl_dist, price + actual_tp_dist
-    elif final_signal == "SHORT 🔴":
-        stop_loss, take_profit = price + actual_sl_dist, price - actual_tp_dist
+    if final_signal == "LONG 🟢": stop_loss, take_profit = price - actual_sl_dist, price + actual_tp_dist
+    elif final_signal == "SHORT 🔴": stop_loss, take_profit = price + actual_sl_dist, price - actual_tp_dist
 
     result = {
         "status": "success", "symbol": symbol.upper(), "binance_symbol": f"{binance_sym}USDT", "interval": interval,
@@ -408,14 +378,11 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "stoch_k": round(float(last_raw["Stoch_K"]), 1) if pd.notna(last_raw["Stoch_K"]) else None,
         "atr_pct": round(float(last_raw["ATR_pct"]), 2) if pd.notna(last_raw["ATR_pct"]) else None,
         "obv_trend": "↑" if float(last_raw["OBV_signal"]) > 0 else "↓",
-        "trend_strength": round(float(last_raw["trend_strength"]) * 100, 3) if pd.notna(
-            last_raw["trend_strength"]) else None,
-        "price_vs_ema20": round(float(last_raw["price_vs_ema20"]) * 100, 3) if pd.notna(
-            last_raw["price_vs_ema20"]) else None,
+        "trend_strength": round(float(last_raw["trend_strength"]) * 100, 3) if pd.notna(last_raw["trend_strength"]) else None,
+        "price_vs_ema20": round(float(last_raw["price_vs_ema20"]) * 100, 3) if pd.notna(last_raw["price_vs_ema20"]) else None,
         "volume_spike": round(float(last_raw["volume_spike"]), 2) if pd.notna(last_raw["volume_spike"]) else None,
         "fake_breakout": int(last_raw["fake_breakout"]) if pd.notna(last_raw["fake_breakout"]) else 0,
-        "target_threshold_pct": round(float(last_raw["ATR_pct"]) * atr_target_mult, 3) if pd.notna(
-            last_raw["ATR_pct"]) else None,
+        "target_threshold_pct": round(float(last_raw["ATR_pct"]) * atr_target_mult, 3) if pd.notna(last_raw["ATR_pct"]) else None,
         "stop_loss": round(stop_loss, 6) if stop_loss is not None else None,
         "take_profit": round(take_profit, 6) if take_profit is not None else None,
         "risk_reward": 2.0 if stop_loss is not None and take_profit is not None else None,
@@ -423,7 +390,6 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     }
     log_prediction_to_db(result)
     return result
-
 
 if __name__ == "__main__":
     print(json.dumps(get_ml_signal("BTC", interval="1d"), indent=2, ensure_ascii=False))

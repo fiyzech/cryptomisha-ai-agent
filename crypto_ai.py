@@ -7,15 +7,19 @@ import psycopg2
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from dotenv import load_dotenv
 
 from ml_engine import get_ml_signal
 
-# Змінні оточення для підключення до БД
-DB_USER = os.getenv("POSTGRES_USER", "CryptoPulse_admin")
-DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "5432")
-DB_NAME = os.getenv("POSTGRES_DB", "CryptoPulse_db")
+# Завантажуємо локальний .env (для тестів у VS Code)
+load_dotenv()
+
+# Змінні оточення для підключення до БД (пріоритет на st.secrets для хмари)
+DB_USER = st.secrets.get("POSTGRES_USER", os.getenv("POSTGRES_USER"))
+DB_PASSWORD = st.secrets.get("POSTGRES_PASSWORD", os.getenv("POSTGRES_PASSWORD"))
+DB_HOST = st.secrets.get("DB_HOST", os.getenv("DB_HOST"))
+DB_PORT = st.secrets.get("DB_PORT", os.getenv("DB_PORT"))
+DB_NAME = st.secrets.get("POSTGRES_DB", os.getenv("POSTGRES_DB"))
 
 st.set_page_config(
     page_title="CryptoMisha AI",
@@ -158,7 +162,6 @@ def safe_text(value) -> str:
         return "—"
     return html.escape(str(value)).replace("\n", "<br>")
 
-
 def safe_price(value) -> str:
     if value is None:
         return "—"
@@ -172,7 +175,6 @@ def safe_price(value) -> str:
         return f"${value:.4f}"
     return f"${value:.8f}"
 
-
 def safe_url(url: str) -> str:
     if not url:
         return "#"
@@ -180,7 +182,6 @@ def safe_url(url: str) -> str:
     if url.startswith("http://") or url.startswith("https://"):
         return html.escape(url, quote=True)
     return "#"
-
 
 def fmt_price(v: float) -> str:
     try:
@@ -193,7 +194,6 @@ def fmt_price(v: float) -> str:
         return f"${v:.4f}"
     return f"${v:.8f}"
 
-
 def fmt_large(v: float) -> str:
     try:
         v = float(v)
@@ -204,7 +204,6 @@ def fmt_large(v: float) -> str:
     if v >= 1e6:
         return f"${v / 1e6:.2f}M"
     return f"${v:,.0f}"
-
 
 COIN_ALIASES = {
     "BTC": ["btc", "bitcoin", "біткоїн", "биткоин", "біткоін", "біток"],
@@ -220,10 +219,8 @@ COIN_ALIASES = {
     "SHIB": ["shib", "shiba", "шіба"],
 }
 
-
 @st.cache_data(ttl=86400)
 def get_all_valid_tickers():
-    """Стягує всі актуальні тікери з Binance для валідації."""
     try:
         r = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=5)
         if r.status_code == 200:
@@ -233,30 +230,22 @@ def get_all_valid_tickers():
         pass
     return {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "SUI"}
 
-
 def extract_coin_from_question(text: str):
     if not text:
         return None
-
     q = text.lower()
-
     for symbol, aliases in COIN_ALIASES.items():
         for alias in aliases:
             if re.search(fr'\b{alias}\b', q):
                 return symbol
-
     valid_tickers = get_all_valid_tickers()
-
     cleaned = text.replace("?", " ").replace(",", " ").replace(".", " ").replace("!", " ")
     words = cleaned.split()
-
     for word in words:
         clean = word.upper().strip()
         if clean in valid_tickers:
             return clean
-
     return None
-
 
 @st.cache_data(ttl=15, show_spinner=False)
 def get_realtime_binance_price(symbol: str):
@@ -279,13 +268,11 @@ def get_realtime_binance_price(symbol: str):
                 "change_24h": float(data.get("priceChangePercent", 0)),
                 "high_24h": float(data.get("highPrice", 0)),
                 "low_24h": float(data.get("lowPrice", 0)),
-                "volume": float(data.get("quoteVolume", 0)),
-                "source": "Binance"
+                "volume": float(data.get("quoteVolume", 0))
             }
     except Exception:
         pass
     return None
-
 
 def build_realtime_price_context(user_question: str):
     symbol = extract_coin_from_question(user_question)
@@ -294,12 +281,12 @@ def build_realtime_price_context(user_question: str):
     data = get_realtime_binance_price(symbol)
     if not data:
         return f"""
-Користувач, можливо, питає про монету {symbol}, але актуальну ціну з Binance зараз отримати не вдалося.
+Користувач, можливо, питає про монету {symbol}, але актуальну ціну зараз отримати не вдалося.
 Не вигадуй точну ціну. Скажи, що зараз не можеш підтягнути актуальні дані по цій монеті.
 """
     return f"""
 ВАЖЛИВО: користувач питає про монету {data['symbol']}.
-Ось АКТУАЛЬНІ ринкові дані з {data['source']}:
+Ось АКТУАЛЬНІ ринкові дані:
 - Пара: {data['pair']}
 - Поточна ціна: {fmt_price(data['price'])}
 - Зміна за 24г: {data['change_24h']:+.2f}%
@@ -311,18 +298,15 @@ def build_realtime_price_context(user_question: str):
 Не вигадуй іншу ціну.
 """
 
-
 def rsi_color(rsi: float) -> str:
     if rsi >= 70: return "#FF3B30"
     if rsi <= 30: return "#00E676"
     return "#A3A4B0"
 
-
 def get_signal_style(signal: str):
     if "LONG" in signal: return "ml-signal-long", "#00E676"
     if "SHORT" in signal: return "ml-signal-short", "#FF3B30"
     return "ml-signal-neutral", "#fbbf24"
-
 
 @st.cache_data(ttl=86400)
 def get_binance_tickers():
@@ -378,7 +362,6 @@ def get_binance_tickers():
         pass
     return ["BTC (Bitcoin)", "ETH (Ethereum)", "SOL (Solana)", "SUI (Sui)"]
 
-
 @st.cache_data(ttl=3600)
 def search_coingecko_id(query: str):
     if not query:
@@ -396,21 +379,17 @@ def search_coingecko_id(query: str):
         pass
     return None, None
 
-
 @st.cache_data(ttl=30)
 def get_coin_data(coin_id: str):
     try:
         r = requests.get(
             f"{COINGECKO_BASE}/coins/{coin_id}",
-            params={
-                "localization": "false", "tickers": "false", "community_data": "true", "developer_data": "false"
-            },
+            params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "false"},
             timeout=10
         )
         return r.json() if r.status_code == 200 else None
     except Exception:
         return None
-
 
 @st.cache_data(ttl=120)
 def get_sparkline(coin_id: str):
@@ -426,11 +405,9 @@ def get_sparkline(coin_id: str):
     except Exception:
         return []
 
-
 @st.cache_data(ttl=300, show_spinner=False)
 def get_ml_signal_cached(symbol: str, interval: str):
     return get_ml_signal(symbol, interval)
-
 
 def translate_to_uk(text: str) -> str:
     if not text or text == "Без заголовку":
@@ -444,7 +421,6 @@ def translate_to_uk(text: str) -> str:
     except Exception:
         pass
     return text
-
 
 @st.cache_data(ttl=1800)
 def get_crypto_news(coin_name: str, symbol: str = ""):
@@ -473,9 +449,8 @@ def get_crypto_news(coin_name: str, symbol: str = ""):
     except Exception:
         return []
 
-
 def stream_ollama(prompt: str):
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "").strip()
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY", "")).strip()
     if not GROQ_API_KEY:
         yield "⚠️ Ключ GROQ_API_KEY не знайдено! Додай його у Secrets."
         return
@@ -503,9 +478,7 @@ def stream_ollama(prompt: str):
     except Exception as e:
         yield f"⚠️ Технічна помилка: {e}"
 
-
-def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
-                          news):
+def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news):
     news_text = "Актуальні новини:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Новин немає."
     return f"""Ти — Міша, фінансовий AI-асистент. Пиши чистою українською. Стиль: коротко, впевнено.
 Проаналізуй {name} ({symbol}):
@@ -515,7 +488,6 @@ def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, 
 - Капіталізація: {fmt_large(cap)}
 {news_text}
 Напиши короткий огляд у 4-5 реченнях. Не давай фінансову пораду."""
-
 
 def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news, history, user_q):
     history_text = "\n".join([f"{'Користувач' if m['role'] == 'user' else 'Ти'}: {m['content']}" for m in history[-6:]])
@@ -533,11 +505,9 @@ def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news
 Запит користувача: {user_q}
 Відповідай природно."""
 
-
 for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []),
                      ("cg_name", None), ("generate_new", False), ("selected_interval", "4h")]:
     if key not in st.session_state: st.session_state[key] = default
-
 
 def handle_chat_submit():
     user_val = st.session_state.chat_input_widget
@@ -546,10 +516,8 @@ def handle_chat_submit():
         st.session_state.generate_new = True
     st.session_state.chat_input_widget = ""
 
-
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="hero-sub">// Binance + CoinGecko + NewsAPI + Groq AI ({MODEL_NAME})</div>',
-            unsafe_allow_html=True)
+st.markdown(f'<div class="hero-sub">// Оснащено моделю {MODEL_NAME}</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 
@@ -569,14 +537,13 @@ with col3:
 if user_ticker and (
         analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))):
     if analyze_btn or st.session_state.current_coin != user_ticker:
-        with st.spinner(f"Шукаю {user_ticker}..."):
+        with st.spinner(f"Збираю дані для {user_ticker}..."):
             cg_id, cg_name = search_coingecko_id(user_ticker)
             if cg_id:
                 data = get_coin_data(cg_id)
                 prices = get_sparkline(cg_id)
             else:
                 data, prices = None, []
-                st.warning(f"⚠️ Не знайшов {user_ticker} на CoinGecko, аналізую через Binance!")
             st.session_state.coin_data = data
             st.session_state.current_coin = user_ticker
             st.session_state.coin_prices = prices
@@ -611,9 +578,7 @@ if user_ticker and (
 
         if realtime_selected:
             price, change_24h = realtime_selected.get("price", price), realtime_selected.get("change_24h", change_24h)
-            low_24h, high_24h, vol = realtime_selected.get("low_24h", low_24h), realtime_selected.get("high_24h",
-                                                                                                      high_24h), realtime_selected.get(
-                "volume", vol)
+            low_24h, high_24h, vol = realtime_selected.get("low_24h", low_24h), realtime_selected.get("high_24h", high_24h), realtime_selected.get("volume", vol)
 
         st.markdown(f"""
         <div class="card">
@@ -636,14 +601,12 @@ if user_ticker and (
 
     elif realtime_selected:
         price, change_24h = realtime_selected.get("price", 0), realtime_selected.get("change_24h", 0)
-        low_24h, high_24h, vol = realtime_selected.get("low_24h", 0), realtime_selected.get("high_24h",
-                                                                                            0), realtime_selected.get(
-            "volume", 0)
+        low_24h, high_24h, vol = realtime_selected.get("low_24h", 0), realtime_selected.get("high_24h", 0), realtime_selected.get("volume", 0)
         display_name = user_ticker
 
         st.markdown(f"""
         <div class="card">
-            <div class="card-title">{safe_text(display_name)} · Binance · {safe_text(user_ticker)}/USDT</div>
+            <div class="card-title">{safe_text(display_name)} · Актуальні дані · {safe_text(user_ticker)}/USDT</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
                 <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
@@ -666,7 +629,7 @@ if user_ticker and (
     """
     components.html(tv_html, height=420)
 
-    with st.spinner(f"🧠 ML-модель збирає дані з Binance..."):
+    with st.spinner(f"🧠 ML-модель аналізує ринок..."):
         ml_result = get_ml_signal_cached(user_ticker, selected_interval)
         st.session_state.ml_result = ml_result
 
@@ -676,14 +639,11 @@ if user_ticker and (
         rsi_val = ml_result.get("rsi")
         rsi_c = rsi_color(rsi_val) if isinstance(rsi_val, (int, float)) else "#e2e8f0"
         bb_pct = ml_result.get("bb_percent")
-        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(
-            bb_pct, (int, float)) else "—"
+        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(bb_pct, (int, float)) else "—"
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
         extra_metrics = f"&nbsp;·&nbsp; Precision: <b>{ml_result.get('precision', '—')}%</b> &nbsp;·&nbsp; Recall: <b>{ml_result.get('recall', '—')}%</b> &nbsp;·&nbsp; F1: <b>{ml_result.get('f1_score', '—')}%</b>"
-        raw_prediction_html = f'<div class="ml-acc">Сирий прогноз: <b>{ml_result["raw_prediction"]}</b></div>' if ml_result.get(
-            "signal") == "NO TRADE ⚪" else ""
-        sltp_html = f'<div class="ml-acc">SL: <b>{safe_price(ml_result["stop_loss"])}</b> &nbsp;·&nbsp; TP: <b>{safe_price(ml_result["take_profit"])}</b></div>' if ml_result.get(
-            "stop_loss") else ""
+        raw_prediction_html = f'<div class="ml-acc">Сирий прогноз: <b>{ml_result["raw_prediction"]}</b></div>' if ml_result.get("signal") == "NO TRADE ⚪" else ""
+        sltp_html = f'<div class="ml-acc">SL: <b>{safe_price(ml_result["stop_loss"])}</b> &nbsp;·&nbsp; TP: <b>{safe_price(ml_result["take_profit"])}</b></div>' if ml_result.get("stop_loss") else ""
 
         st.markdown(f"""
 <div class="ml-card" style="border-color: {signal_border};">
@@ -777,7 +737,7 @@ if user_ticker and (
                 df_logs['created_at'] = pd.to_datetime(df_logs['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')
                 st.dataframe(df_logs, use_container_width=True, hide_index=True)
             else:
-                st.write("База даних порожня.")
+                st.write("База даних порожня. Зачекай першого запису!")
             conn.close()
         except Exception as e:
             st.error(f"Помилка підключення до БД: {e}")

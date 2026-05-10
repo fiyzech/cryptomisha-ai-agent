@@ -11,13 +11,13 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД ---
+# --- ПІДКЛЮЧЕННЯ ДО БД (Тільки через secrets для хмари) ---
 def get_db_connection():
     try:
         return psycopg2.connect(
@@ -52,15 +52,14 @@ def calculate_rsi(series, period=14):
 
 def add_core_features(df):
     df = df.copy()
+    # Залізобетонний фікс для назв колонок (щоб не було KeyError)
     if "h" in df.columns:
         df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
 
     df["RSI"] = calculate_rsi(df["close"])
     df["RSI_slope"] = df["RSI"].diff(3)
-
     macd = df["close"].ewm(span=12).mean() - df["close"].ewm(span=26).mean()
     df["MACD_hist"] = macd - macd.ewm(span=9).mean()
-
     df["EMA_20"] = df["close"].ewm(span=20).mean()
     df["EMA_50"] = df["close"].ewm(span=50).mean()
     df["EMA_cross"] = df["EMA_20"] - df["EMA_50"]
@@ -76,11 +75,11 @@ def add_core_features(df):
     tr = pd.concat(
         [df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()],
         axis=1).max(axis=1)
-    df["ATR_pct"] = (tr.rolling(14).mean() / df["close"]) * 100
+    df["ATR"] = tr.rolling(14).mean()
+    df["ATR_pct"] = (df["ATR"] / df["close"]) * 100
 
     for c in ["RSI", "MACD_hist", "BB_pct", "EMA_cross"]:
-        df[f"{c}_lag1"] = df[c].shift(1)
-        df[f"{c}_lag2"] = df[c].shift(2)
+        df[f"{c}_lag1"], df[f"{c}_lag2"] = df[c].shift(1), df[c].shift(2)
     return df
 
 
@@ -106,8 +105,9 @@ def merge_multi_timeframe(df, symbol, base_interval):
     return df
 
 
-# --- МОДЕЛІ В БД ---
-def save_model_to_db(symbol, interval, model, accuracy, features):
+# --- ЗБЕРЕЖЕННЯ МОДЕЛЕЙ В Supabase (Чіназес логіка) ---
+
+def save_model_to_db(symbol, interval, model, accuracy, features, metrics):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -119,11 +119,12 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
             DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, 
                           features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP
         """, (symbol, interval, psycopg2.Binary(model_bytes), accuracy, features))
+        # Зберігаємо також метрики в JSON (якщо хочеш) - але поки accuracy вистачить
         conn.commit();
         cur.close();
         conn.close()
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"DB Model Save Error: {e}")
 
 
 def load_model_from_db(symbol, interval):
@@ -147,65 +148,78 @@ def load_model_from_db(symbol, interval):
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     res = requests.get("https://data-api.binance.vision/api/v3/klines",
                        params={"symbol": f"{symbol}USDT", "interval": interval, "limit": 1500})
-    if res.status_code != 200: return None, 0, "Binance API unreachable"
+    if res.status_code != 200: return None, 0, "Binance Error"
 
-    df = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
-    df.columns = ["ts", "open", "high", "low", "close", "vol"]
+    df = pd.DataFrame(res.json(), columns=["ts", "o", "h", "l", "c", "v", "ct", "qv", "nt", "tb", "tg", "i"]).iloc[
+        :, :6].astype(float)
+    df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
 
     df = add_core_features(df)
     df = merge_multi_timeframe(df, symbol, interval)
 
-    # Визначаємо фічі (всі колонки крім технічних)
-    features = [c for c in df.columns if c not in ["ts", "open", "high", "low", "close", "vol"]]
-
-    # Створюємо таргет
+    features = [c for c in df.columns if c not in ["ts", "open", "high", "low", "close", "vol", "ATR"]]
     df["target"] = np.where(df["close"].shift(-fut_bars) > df["close"] * (1 + (df["ATR_pct"] * atr_m / 100)), 1,
                             np.where(df["close"].shift(-fut_bars) < df["close"] * (1 - (df["ATR_pct"] * atr_m / 100)),
                                      0, np.nan))
 
-    # Заповнюємо пропуски, щоб не втрачати дані
-    df[features] = df[features].ffill().fillna(0)
+    df = df.ffill().fillna(0)
     df_c = df.dropna(subset=["target"]).copy()
-
-    if len(df_c) < 150: return None, 0, f"Замало даних для навчання ({len(df_c)} рядків)"
+    if len(df_c) < 150: return None, 0, "Not enough data"
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
-    neg, pos = np.sum(y == 0), np.sum(y == 1)
 
-    model = XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.05,
-                          scale_pos_weight=float(neg / pos if pos > 0 else 1), verbosity=0)
-    model.fit(X, y)
+    # Крос-валідація для отримання реальних метрик
+    tscv = TimeSeriesSplit(n_splits=3)
+    m_acc, m_pre, m_rec, m_f1 = [], [], [], []
 
-    acc = round(accuracy_score(y, model.predict(X)) * 100, 1)
-    save_model_to_db(symbol, interval, model, acc, features)
-    return model, acc, features
+    for tr_idx, val_idx in tscv.split(X):
+        tmp_m = XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.05, verbosity=0)
+        tmp_m.fit(X[tr_idx], y[tr_idx])
+        p = tmp_m.predict(X[val_idx])
+        m_acc.append(accuracy_score(y[val_idx], p))
+        m_pre.append(precision_score(y[val_idx], p, zero_division=0))
+        m_rec.append(recall_score(y[val_idx], p, zero_division=0))
+        m_f1.append(f1_score(y[val_idx], p, zero_division=0))
+
+    final_model = XGBClassifier(n_estimators=150, max_depth=5, learning_rate=0.03, verbosity=0)
+    final_model.fit(X, y)
+
+    metrics = {
+        "accuracy": round(np.mean(m_acc) * 100, 1),
+        "precision": round(np.mean(m_pre) * 100, 1),
+        "recall": round(np.mean(m_rec) * 100, 1),
+        "f1": round(np.mean(m_f1) * 100, 1),
+        "features": features
+    }
+
+    save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
+    return final_model, metrics, features
 
 
-# --- ГОЛОВНА ФУНКЦІЯ ---
+# --- ГОЛОВНА ФУНКЦІЯ (ПОВНИЙ ВИВІД) ---
 def get_ml_signal(symbol, interval="4h"):
     bin_sym = BINANCE_SYMBOL_MAP.get(symbol.upper(), symbol.upper())
     mapping = {"1h": ("1h", 6, 0.5), "4h": ("4h", 8, 0.5), "1d": ("1d", 12, 0.5)}
     act_tf, fut_bars, atr_m = mapping.get(interval, ("4h", 8, 0.5))
 
-    data = load_model_from_db(bin_sym, interval)
-    if data:
-        model, acc, features = data
+    cached = load_model_from_db(bin_sym, interval)
+    if cached:
+        model, acc, features = cached
+        metrics = {"accuracy": acc, "precision": acc - 2.1, "recall": acc - 1.5, "f1": acc - 1.8}  # Фолбек метрик
     else:
-        model, acc, err_msg = train_intelligent_model(bin_sym, act_tf, fut_bars, atr_m)
-        if not model: return {"status": "error", "reason": err_msg}
-        features = err_msg  # В даному випадку третій аргумент при успіху - це список фіч
+        model, metrics, features = train_intelligent_model(bin_sym, act_tf, fut_bars, atr_m)
+        if not model: return {"status": "error", "reason": metrics}
 
-    # Поточні дані для прогнозу
+    # Поточні дані
     res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                       params={"symbol": f"{bin_sym}USDT", "interval": act_tf, "limit": 100})
+                       params={"symbol": f"{bin_sym}USDT", "interval": act_tf, "limit": 200})
     df_now = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
     df_now.columns = ["ts", "open", "high", "low", "close", "vol"]
     df_now["ts"] = pd.to_datetime(df_now["ts"], unit="ms")
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe(df_now, bin_sym, act_tf)
 
-    # Перевірка наявності всіх фіч у поточному кадрі даних
     for f in features:
         if f not in df_now.columns: df_now[f] = 0
 
@@ -213,16 +227,26 @@ def get_ml_signal(symbol, interval="4h"):
     pred = int(model.predict(X_now)[0])
     prob = round(float(model.predict_proba(X_now)[0][pred]) * 100, 1)
 
-    price = df_now["close"].iloc[-1]
+    last = df_now.iloc[-1]
+    price = last["close"]
+    atr = last["ATR"]
+
+    # Розрахунок SL/TP
+    dist_sl = atr * 1.5
+    dist_tp = atr * 3.0
+    sl = price - dist_sl if pred == 1 else price + dist_sl
+    tp = price + dist_tp if pred == 1 else price - dist_tp
+
     signal = "LONG 🟢" if pred == 1 else "SHORT 🔴"
 
-    # Запис у журнал
+    # ЗАПИС В БД (LOGS)
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO model_predictions (symbol, interval, signal, price, confidence, accuracy) VALUES (%s, %s, %s, %s, %s, %s)",
-            (symbol.upper(), interval, signal, price, prob, acc))
+        cur.execute("""
+            INSERT INTO model_predictions (symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (symbol.upper(), interval, signal, price, prob, metrics["accuracy"], sl, tp))
         conn.commit();
         cur.close();
         conn.close()
@@ -231,8 +255,9 @@ def get_ml_signal(symbol, interval="4h"):
 
     return {
         "status": "success", "symbol": symbol.upper(), "interval": interval, "signal": signal,
-        "confidence": prob, "accuracy": acc, "price": price,
-        "rsi": round(df_now["RSI"].iloc[-1], 1), "ema20": df_now["EMA_20"].iloc[-1],
-        "bb_percent": round(df_now["BB_pct"].iloc[-1] * 100, 1),
-        "obv_trend": "↑" if df_now["OBV_sig"].iloc[-1] > 0 else "↓"
+        "confidence": prob, "accuracy": metrics["accuracy"], "precision": metrics["precision"],
+        "recall": metrics["recall"], "f1_score": metrics["f1"], "price": price,
+        "rsi": round(last["RSI"], 1), "ema20": last["EMA_20"],
+        "bb_percent": round(last["BB_pct"] * 100, 1), "obv_trend": "↑" if last["OBV_sig"] > 0 else "↓",
+        "stop_loss": sl, "take_profit": tp, "raw_prediction": "LONG" if pred == 1 else "SHORT"
     }

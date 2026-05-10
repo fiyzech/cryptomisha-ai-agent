@@ -17,9 +17,10 @@ warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД ---
+# --- ПІДКЛЮЧЕННЯ ДО БД (Тільки через secrets для хмари) ---
 def get_db_connection():
     try:
+        # Намагаємось взяти з Streamlit Secrets
         return psycopg2.connect(
             dbname=st.secrets["POSTGRES_DB"],
             user=st.secrets["POSTGRES_USER"],
@@ -27,13 +28,14 @@ def get_db_connection():
             host=st.secrets["DB_HOST"],
             port=st.secrets["DB_PORT"]
         )
-    except:
+    except Exception as e:
+        # Якщо локально - беремо з .env
         return psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB", "CryptoPulse_db"),
-            user=os.getenv("POSTGRES_USER", "CryptoPulse_admin"),
-            password=os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password"),
+            dbname=os.getenv("POSTGRES_DB", "postgres"),
+            user=os.getenv("POSTGRES_USER", "postgres"),
+            password=os.getenv("POSTGRES_PASSWORD", "password"),
             host=os.getenv("DB_HOST", "localhost"),
-            port=os.getenv("DB_PORT", "5432")
+            port=os.getenv("DB_PORT", "6543")
         )
 
 
@@ -52,22 +54,24 @@ def calculate_rsi(series, period=14):
 
 def add_core_features(df):
     df = df.copy()
-    # Перевірка наявності необхідних колонок
-    required = ["open", "high", "low", "close", "vol"]
-    for col in required:
-        if col not in df.columns:
-            # Якщо колонки мають короткі назви (o, h, l, c, v)
-            mapping = {"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"}
-            df = df.rename(columns=mapping)
-            break
+
+    # ВИПРАВЛЕННЯ KeyError: Перевіряємо назви колонок
+    if "h" in df.columns and "high" not in df.columns:
+        df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
+
+    # Якщо це сирі дані з Binance (без назв колонок)
+    if df.columns.dtype == 'int64' or 0 in df.columns:
+        df = df.iloc[:, :6]
+        df.columns = ["ts", "open", "high", "low", "close", "vol"]
 
     df["RSI"] = calculate_rsi(df["close"])
     df["RSI_slope"] = df["RSI"].diff(3)
+
     macd = df["close"].ewm(span=12).mean() - df["close"].ewm(span=26).mean()
     df["MACD_hist"] = macd - macd.ewm(span=9).mean()
+
     df["EMA_20"] = df["close"].ewm(span=20).mean()
     df["EMA_50"] = df["close"].ewm(span=50).mean()
-    df["EMA_200"] = df["close"].ewm(span=200).mean()
     df["EMA_cross"] = df["EMA_20"] - df["EMA_50"]
 
     std = df["close"].rolling(20).std()
@@ -78,7 +82,7 @@ def add_core_features(df):
                           np.where(df["close"] < df["close"].shift(), -df["vol"], 0))).cumsum()
     df["OBV_sig"] = df["OBV"] - df["OBV"].ewm(span=20).mean()
 
-    # ATR та ATR_pct (Ось тут була помилка KeyError)
+    # Розрахунок ATR (True Range)
     tr = pd.concat(
         [df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()],
         axis=1).max(axis=1)
@@ -87,52 +91,53 @@ def add_core_features(df):
     for c in ["RSI", "MACD_hist", "BB_pct", "EMA_cross"]:
         df[f"{c}_lag1"] = df[c].shift(1)
         df[f"{c}_lag2"] = df[c].shift(2)
+
     return df
 
 
 def get_aux_intervals(base):
-    return {"1h": ["5m", "15m"], "4h": ["15m", "1h"], "1d": ["1h", "4h"]}.get(base, ["1h"])
+    return {"1h": ["15m", "4h"], "4h": ["1h", "1d"], "1d": ["4h", "1w"]}.get(base, ["1h"])
 
 
 def merge_multi_timeframe(df, symbol, base_interval):
     for aux in get_aux_intervals(base_interval):
-        res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                           params={"symbol": f"{symbol}USDT", "interval": aux, "limit": 500})
-        if res.status_code == 200:
-            raw_data = res.json()
-            aux_df = pd.DataFrame(raw_data).iloc[:, :6].astype(float)
-            aux_df.columns = ["ts", "open", "high", "low", "close", "vol"]
-            aux_df = add_core_features(aux_df)
+        try:
+            res = requests.get("https://data-api.binance.vision/api/v3/klines",
+                               params={"symbol": f"{symbol}USDT", "interval": aux, "limit": 300}, timeout=5)
+            if res.status_code == 200:
+                aux_df = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
+                aux_df.columns = ["ts", "open", "high", "low", "close", "vol"]
+                aux_df = add_core_features(aux_df)
 
-            keep_cols = ["ts", "RSI", "MACD_hist", "EMA_cross", "BB_pct", "ATR_pct"]
-            aux_df = aux_df[keep_cols].rename(columns=lambda x: f"{aux}_{x}" if x != "ts" else x)
-            aux_df["ts"] = pd.to_datetime(aux_df["ts"], unit="ms")
+                keep = ["ts", "RSI", "MACD_hist", "EMA_cross", "BB_pct", "ATR_pct"]
+                aux_df = aux_df[keep].rename(columns=lambda x: f"{aux}_{x}" if x != "ts" else x)
+                aux_df["ts"] = pd.to_datetime(aux_df["ts"], unit="ms")
 
-            df = df.sort_values("ts")
-            aux_df = aux_df.sort_values("ts")
-            df = pd.merge_asof(df, aux_df, on="ts", direction="backward")
+                df = pd.merge_asof(df.sort_values("ts"), aux_df.sort_values("ts"), on="ts", direction="backward")
+        except:
+            continue
     return df
 
 
-# --- РОБОТА З МОДЕЛЯМИ ---
+# --- РОБОТА З БД (МОДЕЛІ ТА ПРОГНОЗИ) ---
+
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         model_bytes = pickle.dumps(model)
-        query = """
+        cur.execute("""
             INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (symbol, interval) 
             DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, 
                           features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP
-        """
-        cur.execute(query, (symbol, interval, psycopg2.Binary(model_bytes), accuracy, features))
+        """, (symbol, interval, psycopg2.Binary(model_bytes), accuracy, features))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"DB Save Error: {e}")
+        print(f"DB Error (Save Model): {e}")
 
 
 def load_model_from_db(symbol, interval):
@@ -146,16 +151,16 @@ def load_model_from_db(symbol, interval):
         cur.close()
         conn.close()
         if row:
-            trained_at = row[3]
-            if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=7):
+            # Якщо модель свіжа (менше 7 днів) - беремо її
+            if datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7):
                 return pickle.loads(row[0]), row[1], row[2]
     except:
         pass
     return None
 
 
-# --- ТРЕНУВАННЯ ---
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
+    # Качаємо історію
     res = requests.get("https://data-api.binance.vision/api/v3/klines",
                        params={"symbol": f"{symbol}USDT", "interval": interval, "limit": 1500})
     if res.status_code != 200: return None, 0, []
@@ -168,7 +173,6 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     df = merge_multi_timeframe(df, symbol, interval)
 
     features = [c for c in df.columns if c not in ["ts", "open", "high", "low", "close", "vol"]]
-
     df["target"] = np.where(df["close"].shift(-fut_bars) > df["close"] * (1 + (df["ATR_pct"] * atr_m / 100)), 1,
                             np.where(df["close"].shift(-fut_bars) < df["close"] * (1 - (df["ATR_pct"] * atr_m / 100)),
                                      0, np.nan))
@@ -179,7 +183,7 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     X, y = df_c[features].values, df_c["target"].astype(int).values
     neg, pos = np.sum(y == 0), np.sum(y == 1)
 
-    model = XGBClassifier(n_estimators=150, max_depth=4, learning_rate=0.05,
+    model = XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.05,
                           scale_pos_weight=float(neg / pos if pos > 0 else 1), verbosity=0)
     model.fit(X, y)
 
@@ -189,21 +193,25 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
 
 
 # --- ГОЛОВНА ФУНКЦІЯ ---
+
 def get_ml_signal(symbol, interval="4h"):
     bin_sym = BINANCE_SYMBOL_MAP.get(symbol.upper(), symbol.upper())
-    mapping = {"1h": ("5m", 6, 0.5), "4h": ("15m", 8, 0.5), "1d": ("1h", 12, 0.5)}
-    act_tf, fut_bars, atr_m = mapping.get(interval, ("15m", 8, 0.5))
+    mapping = {"1h": ("1h", 6, 0.5), "4h": ("4h", 8, 0.5), "1d": ("1d", 12, 0.5)}
+    act_tf, fut_bars, atr_m = mapping.get(interval, ("4h", 8, 0.5))
 
+    # 1. Шукаємо в базі
     data = load_model_from_db(bin_sym, interval)
     if data:
         model, acc, features = data
     else:
+        # 2. Якщо немає - вчимо
         model, acc, features = train_intelligent_model(bin_sym, act_tf, fut_bars, atr_m)
 
-    if not model: return {"status": "error", "reason": "Data error"}
+    if not model: return {"status": "error", "reason": "Навчання не вдалося"}
 
+    # 3. Швидкий прогноз на свіжих даних
     res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                       params={"symbol": f"{bin_sym}USDT", "interval": act_tf, "limit": 200})
+                       params={"symbol": f"{bin_sym}USDT", "interval": act_tf, "limit": 100})
     df_now = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
     df_now.columns = ["ts", "open", "high", "low", "close", "vol"]
     df_now["ts"] = pd.to_datetime(df_now["ts"], unit="ms")
@@ -217,7 +225,7 @@ def get_ml_signal(symbol, interval="4h"):
     price = df_now["close"].iloc[-1]
     signal = "LONG 🟢" if pred == 1 else "SHORT 🔴"
 
-    # Логування прогнозу в модельний журнал
+    # 4. Записуємо в Журнал
     try:
         conn = get_db_connection()
         cur = conn.cursor()

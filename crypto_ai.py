@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
-from ml_engine import get_ml_signal
+from ml_engine import get_ml_signal, get_db_connection
 
 # Змінні оточення для підключення до БД
 DB_USER = os.getenv("POSTGRES_USER", "CryptoPulse_admin")
@@ -548,7 +548,7 @@ def handle_chat_submit():
 
 
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="hero-sub">// Binance + CoinGecko + NewsAPI + Groq AI ({MODEL_NAME})</div>',
+st.markdown(f'<div class="hero-sub">// Оснащено моделлю {MODEL_NAME}</div>',
             unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
@@ -576,7 +576,6 @@ if user_ticker and (
                 prices = get_sparkline(cg_id)
             else:
                 data, prices = None, []
-                st.warning(f"⚠️ Не знайшов {user_ticker} на CoinGecko, аналізую через Binance!")
             st.session_state.coin_data = data
             st.session_state.current_coin = user_ticker
             st.session_state.coin_prices = prices
@@ -620,7 +619,6 @@ if user_ticker and (
             <div class="card-title">{safe_text(display_name)} · #{safe_text(rank)} · {safe_text(user_ticker)}/USD</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
-                <div class="stat-chip"><span class="chip-label">Зміна 1г</span><span class="{'change-pos' if change_1h >= 0 else 'change-neg'}">{change_1h:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">Зміна 7д</span><span class="{'change-pos' if change_7d >= 0 else 'change-neg'}">{change_7d:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">MCap</span><span>{fmt_large(cap)}</span></div>
@@ -643,7 +641,7 @@ if user_ticker and (
 
         st.markdown(f"""
         <div class="card">
-            <div class="card-title">{safe_text(display_name)} · Binance · {safe_text(user_ticker)}/USDT</div>
+            <div class="card-title">{safe_text(display_name)} · Актуальні дані · {safe_text(user_ticker)}/USDT</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
                 <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
@@ -666,7 +664,7 @@ if user_ticker and (
     """
     components.html(tv_html, height=420)
 
-    with st.spinner(f"🧠 ML-модель збирає дані з Binance..."):
+    with st.spinner(f"🧠 ML-модель збирає дані..."):
         ml_result = get_ml_signal_cached(user_ticker, selected_interval)
         st.session_state.ml_result = ml_result
 
@@ -679,24 +677,18 @@ if user_ticker and (
         bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(
             bb_pct, (int, float)) else "—"
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
-        extra_metrics = f"&nbsp;·&nbsp; Precision: <b>{ml_result.get('precision', '—')}%</b> &nbsp;·&nbsp; Recall: <b>{ml_result.get('recall', '—')}%</b> &nbsp;·&nbsp; F1: <b>{ml_result.get('f1_score', '—')}%</b>"
-        raw_prediction_html = f'<div class="ml-acc">Сирий прогноз: <b>{ml_result["raw_prediction"]}</b></div>' if ml_result.get(
-            "signal") == "NO TRADE ⚪" else ""
-        sltp_html = f'<div class="ml-acc">SL: <b>{safe_price(ml_result["stop_loss"])}</b> &nbsp;·&nbsp; TP: <b>{safe_price(ml_result["take_profit"])}</b></div>' if ml_result.get(
-            "stop_loss") else ""
 
         st.markdown(f"""
 <div class="ml-card" style="border-color: {signal_border};">
 <div style="font-family:'Space Mono',monospace; font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:.5rem;">⚙️ AI Прогноз · XGBoost · {safe_text(tf_label)}</div>
 <div class="{signal_class}">{safe_text(ml_result['signal'])}<span class="ml-conf">&nbsp;{ml_result.get('confidence', '—')}% впевненості</span></div>
 <div class="ml-indicators">
-<div class="ml-chip"><span class="ml-chip-label">RSI</span><span style="color:{rsi_c}">{safe_text(rsi_val)}</span></div>
-<div class="ml-chip"><span class="ml-chip-label">EMA20</span><span>{safe_price(ml_result.get('ema20'))}</span></div>
-<div class="ml-chip"><span class="ml-chip-label">BB%</span><span>{safe_text(bb_text)}</span></div>
-<div class="ml-chip"><span class="ml-chip-label">OBV</span><span>{obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
+<div class="ml-chip" data-tooltip="RSI: Індекс відносної сили. >70 - перекуплено, <30 - перепродано."><span class="ml-chip-label">RSI</span><span style="color:{rsi_c}">{safe_text(rsi_val)}</span></div>
+<div class="ml-chip" data-tooltip="EMA20: Експоненціальна ковзна середня. Показує короткостроковий тренд."><span>EMA20 {safe_price(ml_result.get('ema20'))}</span></div>
+<div class="ml-chip" data-tooltip="BB%: Положення ціни відносно смуг Боллінджера."><span>BB% {safe_text(bb_text)}</span></div>
+<div class="ml-chip" data-tooltip="OBV: Балансовий обсяг. Показує тиск покупців/продавців."><span>OBV {obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
 </div>
-<div class="ml-acc">📊 Accuracy (CV): <b>{ml_result.get('accuracy', '—')}%</b> {extra_metrics}</div>
-{raw_prediction_html}{sltp_html}
+<div class="ml-acc">📊 Accuracy: <b>{ml_result.get('accuracy', '—')}%</b></div>
 </div>
 """, unsafe_allow_html=True)
     else:
@@ -733,7 +725,7 @@ if user_ticker and (
                 f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз</div>{safe_text(full_analysis)}</div>',
                 unsafe_allow_html=True)
         st.session_state[analysis_key] = full_analysis
-        st.session_state.messages = [{"role": "ai", "content": full_analysis, "label": f"📊 Аналіз {display_name}"}]
+        st.session_state.messages = [{"role": "ai", "content": full_analysis}]
         st.rerun()
 
     for msg in st.session_state.messages:
@@ -760,7 +752,7 @@ if user_ticker and (
             chat_placeholder.markdown(
                 f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша</div>{safe_text(full_answer)}</div>',
                 unsafe_allow_html=True)
-        st.session_state.messages.append({"role": "ai", "content": full_answer, "label": "Відповідь"})
+        st.session_state.messages.append({"role": "ai", "content": full_answer})
         st.session_state.generate_new = False
         st.rerun()
 
@@ -768,10 +760,10 @@ if user_ticker and (
     st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit,
                   label_visibility="collapsed")
 
-    with st.expander("📜 Журнал логів з БД"):
+    with st.expander("📜 Останні прогнози в базі даних"):
         try:
-            conn = psycopg2.connect(dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT)
-            query = "SELECT symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
+            conn = get_db_connection()
+            query = "SELECT symbol, interval, signal, price, confidence, accuracy, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
             df_logs = pd.read_sql_query(query, conn)
             if not df_logs.empty:
                 df_logs['created_at'] = pd.to_datetime(df_logs['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')

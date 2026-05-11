@@ -1,6 +1,8 @@
 import os
 import io
 import pickle
+import json
+import time
 import warnings
 import requests
 import psycopg2
@@ -9,6 +11,7 @@ import numpy as np
 import streamlit as st
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -17,10 +20,9 @@ warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД ---
+# --- ПІДКЛЮЧЕННЯ ДО БД (Універсальне для хмари та локалки) ---
 def get_db_connection():
     try:
-        # Для Streamlit Cloud
         return psycopg2.connect(
             dbname=st.secrets["POSTGRES_DB"],
             user=st.secrets["POSTGRES_USER"],
@@ -29,7 +31,6 @@ def get_db_connection():
             port=st.secrets["DB_PORT"]
         )
     except:
-        # Для локальної машини
         return psycopg2.connect(
             dbname=os.getenv("POSTGRES_DB", "CryptoPulse_db"),
             user=os.getenv("POSTGRES_USER", "CryptoPulse_admin"),
@@ -39,12 +40,48 @@ def get_db_connection():
         )
 
 
-BINANCE_SYMBOL_MAP = {"MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB", "PEPE": "PEPE", "SUI": "SUI",
-                      "SOL": "SOL", "ETH": "ETH", "BTC": "BTC"}
+BINANCE_SYMBOL_MAP = {
+    "MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB",
+    "FLOKI": "FLOKI", "BONK": "BONK", "WIF": "WIF", "PEPE": "PEPE",
+    "ARB": "ARB", "OP": "OP", "SUI": "SUI", "APT": "APT", "INJ": "INJ",
+    "RENDER": "RENDER", "FET": "FET", "WLD": "WLD", "NOT": "NOT",
+    "TON": "TON", "ICP": "ICP", "KAS": "KAS", "HBAR": "HBAR", "FIL": "FIL",
+    "ALGO": "ALGO", "VET": "VET", "XLM": "XLM", "TRX": "TRX", "XMR": "XMR",
+    "MKR": "MKR", "AAVE": "AAVE", "CRV": "CRV", "LDO": "LDO", "ATOM": "ATOM",
+    "DOT": "DOT", "LTC": "LTC", "ADA": "ADA", "DOGE": "DOGE", "LINK": "LINK",
+    "AVAX": "AVAX", "UNI": "UNI", "SOL": "SOL", "BNB": "BNB", "ETH": "ETH",
+    "BTC": "BTC", "XRP": "XRP",
+}
 
 
-# --- МАТЕМАТИКА ТА ІНДИКАТОРИ ---
-def calculate_rsi(series, period=14):
+# --- ЗАПИС ПРОГНОЗІВ ---
+def log_prediction_to_db(data: dict):
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        query = """
+            INSERT INTO model_predictions 
+            (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        values = (
+            data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''),
+            data.get('price', 0.0), data.get('confidence', 0.0), data.get('accuracy', 0.0),
+            data.get('raw_prediction', ''), data.get('stop_loss', None), data.get('take_profit', None)
+        )
+        cursor.execute(query, values)
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        print(f"Помилка запису в БД: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+# --- МАТЕМАТИКА ---
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0.0)).ewm(alpha=1 / period, adjust=False).mean()
@@ -52,62 +89,180 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 
-def add_core_features(df):
-    df = df.copy()
-    # Захист від KeyError
-    if "h" in df.columns:
-        df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
+def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    exp1 = series.ewm(span=fast, adjust=False).mean()
+    exp2 = series.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    histogram = macd - signal_line
+    return macd, signal_line, histogram
 
+
+def calculate_bollinger_bands(series: pd.Series, period: int = 20, std: int = 2):
+    sma = series.rolling(window=period).mean()
+    rolling_std = series.rolling(window=period).std()
+    upper = sma + (rolling_std * std)
+    lower = sma - (rolling_std * std)
+    bandwidth = (upper - lower) / sma.replace(0, np.nan)
+    percent_b = (series - lower) / (upper - lower).replace(0, np.nan)
+    return upper, lower, bandwidth, percent_b
+
+
+def calculate_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    obv = np.where(close > close.shift(), volume, np.where(close < close.shift(), -volume, 0))
+    return pd.Series(obv, index=close.index).cumsum()
+
+
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
+
+
+def calculate_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, k_period: int = 14, d_period: int = 3):
+    lowest_low = low.rolling(window=k_period).min()
+    highest_high = high.rolling(window=k_period).max()
+    k = 100 * (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan)
+    d = k.rolling(window=d_period).mean()
+    return k, d
+
+
+def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 1500):
+    url = "https://data-api.binance.vision/api/v3/klines"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    all_data = []
+    end_time = None
+    remaining = limit
+
+    while remaining > 0:
+        current_limit = min(remaining, 1000)
+        params = {"symbol": symbol.upper(), "interval": interval, "limit": current_limit}
+        if end_time: params["endTime"] = end_time
+
+        try:
+            res = requests.get(url, params=params, headers=headers, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                if not data or not isinstance(data, list): break
+                all_data.extend(data)
+                end_time = data[0][0] - 1
+                remaining -= len(data)
+                if len(data) < current_limit: break
+            else:
+                break
+        except Exception:
+            break
+        time.sleep(0.1)
+
+    if not all_data: return None
+
+    df = pd.DataFrame(all_data).iloc[:, :6]
+    df.columns = ["ts", "open", "high", "low", "close", "vol"]
+    df[["open", "high", "low", "close", "vol"]] = df[["open", "high", "low", "close", "vol"]].astype(float)
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+    return df.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True).tail(limit)
+
+
+def resolve_binance_symbol(symbol: str) -> str:
+    sym = symbol.upper().replace("-", "").replace(" ", "")
+    return BINANCE_SYMBOL_MAP.get(sym, sym)
+
+
+def get_aux_intervals(base_interval: str):
+    mapping = {"5m": ["15m", "1h"], "15m": ["1h", "4h"], "1h": ["4h", "1d"], "4h": ["1d", "1w"], "1d": ["1w", "1M"]}
+    return mapping.get(base_interval, ["1d"])
+
+
+def add_core_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
     df["RSI"] = calculate_rsi(df["close"])
     df["RSI_slope"] = df["RSI"].diff(3)
-    macd = df["close"].ewm(span=12).mean() - df["close"].ewm(span=26).mean()
-    df["MACD_hist"] = macd - macd.ewm(span=9).mean()
-    df["EMA_20"] = df["close"].ewm(span=20).mean()
-    df["EMA_50"] = df["close"].ewm(span=50).mean()
+    macd, macd_sig, macd_hist = calculate_macd(df["close"])
+    df["MACD"], df["MACD_sig"], df["MACD_hist"] = macd, macd_sig, macd_hist
+    df["EMA_20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["EMA_50"] = df["close"].ewm(span=50, adjust=False).mean()
+    df["EMA_200"] = df["close"].ewm(span=200, adjust=False).mean()
     df["EMA_cross"] = df["EMA_20"] - df["EMA_50"]
+    bb_upper, bb_lower, bb_bw, bb_pct = calculate_bollinger_bands(df["close"])
+    df["BB_upper"], df["BB_lower"], df["BB_bandwidth"], df["BB_percent"] = bb_upper, bb_lower, bb_bw, bb_pct
+    df["OBV"] = calculate_obv(df["close"], df["vol"])
+    df["OBV_ema"] = df["OBV"].ewm(span=20, adjust=False).mean()
+    df["OBV_signal"] = df["OBV"] - df["OBV_ema"]
+    df["ATR"] = calculate_atr(df["high"], df["low"], df["close"])
+    df["ATR_pct"] = df["ATR"] / df["close"] * 100
+    stoch_k, stoch_d = calculate_stochastic(df["high"], df["low"], df["close"])
+    df["Stoch_K"], df["Stoch_D"] = stoch_k, stoch_d
+    df["Stoch_cross"] = df["Stoch_K"] - df["Stoch_D"]
+    df["body_size"] = (df["close"] - df["open"]).abs() / df["open"] * 100
+    df["upper_wick"] = (df["high"] - df[["close", "open"]].max(axis=1)) / df["open"] * 100
+    df["lower_wick"] = (df[["close", "open"]].min(axis=1) - df["low"]) / df["open"] * 100
+    df["vol_sma_20"] = df["vol"].rolling(20).mean()
+    df["vol_ratio"] = df["vol"] / df["vol_sma_20"]
+    df["volume_spike"] = df["vol"] / df["vol"].rolling(50).mean()
+    df["momentum_3"] = df["close"].pct_change(3) * 100
+    df["momentum_7"] = df["close"].pct_change(7) * 100
+    df["trend_strength"] = (df["EMA_20"] - df["EMA_200"]).abs() / df["close"]
+    df["price_vs_ema20"] = (df["close"] - df["EMA_20"]) / df["EMA_20"]
+    rolling_high_20 = df["high"].rolling(20).max().shift(1)
+    df["fake_breakout"] = ((df["high"] > rolling_high_20) & (df["close"] < df["open"])).astype(int)
 
-    std = df["close"].rolling(20).std()
-    sma = df["close"].rolling(20).mean()
-    df["BB_pct"] = (df["close"] - (sma - 2 * std)) / (4 * std).replace(0, np.nan)
-
-    df["OBV"] = (np.where(df["close"] > df["close"].shift(), df["vol"],
-                          np.where(df["close"] < df["close"].shift(), -df["vol"], 0))).cumsum()
-    df["OBV_sig"] = df["OBV"] - df["OBV"].ewm(span=20).mean()
-
-    tr = pd.concat(
-        [df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()],
-        axis=1).max(axis=1)
-    df["ATR"] = tr.rolling(14).mean()
-    df["ATR_pct"] = (df["ATR"] / df["close"]) * 100
-
-    for c in ["RSI", "MACD_hist", "BB_pct", "EMA_cross"]:
-        df[f"{c}_lag1"], df[f"{c}_lag2"] = df[c].shift(1), df[c].shift(2)
+    core_cols_to_lag = ["RSI", "MACD_hist", "price_vs_ema20", "Stoch_cross"]
+    for col in core_cols_to_lag:
+        df[f"{col}_lag1"] = df[col].shift(1)
+        df[f"{col}_lag2"] = df[col].shift(2)
     return df
 
 
-def get_aux_intervals(base):
-    return {"1h": ["15m", "4h"], "4h": ["1h", "1d"], "1d": ["4h", "1w"]}.get(base, ["1h"])
+def build_aux_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    df = add_core_features(df)
+    keep_cols = ["ts", "RSI", "MACD_hist", "EMA_cross", "trend_strength", "price_vs_ema20", "ATR_pct"]
+    aux = df[keep_cols].copy()
+    aux = aux.rename(columns={c: f"{prefix}_{c}" for c in aux.columns if c != "ts"})
+    return aux
 
 
-def merge_multi_timeframe(df, symbol, base_interval):
-    for aux in get_aux_intervals(base_interval):
-        try:
-            res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                               params={"symbol": f"{symbol}USDT", "interval": aux, "limit": 400}, timeout=5)
-            if res.status_code == 200:
-                aux_df = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
-                aux_df.columns = ["ts", "open", "high", "low", "close", "vol"]
-                aux_df = add_core_features(aux_df)
-                keep = ["ts", "RSI", "MACD_hist", "EMA_cross", "BB_pct", "ATR_pct"]
-                aux_df = aux_df[keep].rename(columns=lambda x: f"{aux}_{x}" if x != "ts" else x)
-                aux_df["ts"] = pd.to_datetime(aux_df["ts"], unit="ms")
-                df = pd.merge_asof(df.sort_values("ts"), aux_df.sort_values("ts"), on="ts", direction="backward")
-        except:
-            continue
+def merge_multi_timeframe_features(base_df: pd.DataFrame, symbol: str, base_interval: str) -> pd.DataFrame:
+    df = base_df.copy()
+    for aux_interval in get_aux_intervals(base_interval):
+        aux_raw = fetch_binance_data(f"{symbol}USDT", interval=aux_interval, limit=500)
+        if aux_raw is None or len(aux_raw) < 50: continue
+        aux = build_aux_features(aux_raw, prefix=aux_interval)
+
+        td_val = int(aux_interval[:-1])
+        if aux_interval.endswith('m'):
+            td = pd.Timedelta(minutes=td_val)
+        elif aux_interval.endswith('h'):
+            td = pd.Timedelta(hours=td_val)
+        elif aux_interval.endswith('d'):
+            td = pd.Timedelta(days=td_val)
+        elif aux_interval.endswith('w'):
+            td = pd.Timedelta(days=7 * td_val)
+        else:
+            td = pd.Timedelta(0)
+
+        aux['ts'] = aux['ts'] + td
+        df = pd.merge_asof(df.sort_values("ts"), aux.sort_values("ts"), on="ts", direction="backward")
     return df
 
 
-# --- РОБОТА З БД (Збереження/Завантаження мізків) ---
+def build_feature_list(df: pd.DataFrame):
+    features = [
+        "RSI", "RSI_slope", "MACD", "MACD_sig", "MACD_hist", "EMA_cross", "BB_bandwidth", "BB_percent", "OBV_signal",
+        "ATR_pct", "Stoch_K", "Stoch_D", "Stoch_cross", "body_size", "upper_wick", "lower_wick", "vol_ratio",
+        "volume_spike", "momentum_3", "momentum_7", "trend_strength", "price_vs_ema20", "fake_breakout", "RSI_lag1",
+        "RSI_lag2", "MACD_hist_lag1", "MACD_hist_lag2", "price_vs_ema20_lag1", "price_vs_ema20_lag2",
+        "Stoch_cross_lag1", "Stoch_cross_lag2"
+    ]
+    mtf_candidates = ["5m_RSI", "5m_MACD_hist", "5m_EMA_cross", "5m_trend_strength", "5m_price_vs_ema20", "5m_ATR_pct",
+                      "15m_RSI", "15m_MACD_hist", "15m_EMA_cross", "15m_trend_strength", "15m_price_vs_ema20",
+                      "15m_ATR_pct", "1h_RSI", "1h_MACD_hist", "1h_EMA_cross", "1h_trend_strength", "1h_price_vs_ema20",
+                      "1h_ATR_pct", "4h_RSI", "4h_MACD_hist", "4h_EMA_cross", "4h_trend_strength", "4h_price_vs_ema20",
+                      "4h_ATR_pct", "1d_RSI", "1d_MACD_hist", "1d_EMA_cross", "1d_trend_strength", "1d_price_vs_ema20",
+                      "1d_ATR_pct"]
+    features += [col for col in mtf_candidates if col in df.columns]
+    return features
+
+
+# --- РОБОТА З ml_models В БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -120,11 +275,11 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
             DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, 
                           features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP
         """, (symbol, interval, psycopg2.Binary(model_bytes), float(accuracy), features))
-        conn.commit();
-        cur.close();
+        conn.commit()
+        cur.close()
         conn.close()
     except Exception as e:
-        print(f"DB Error (Save Model): {e}")
+        print(f"Помилка збереження моделі: {e}")
 
 
 def load_model_from_db(symbol, interval):
@@ -134,8 +289,8 @@ def load_model_from_db(symbol, interval):
         cur.execute(
             "SELECT model_binary, accuracy, features, trained_at FROM ml_models WHERE symbol = %s AND interval = %s",
             (symbol, interval))
-        row = cur.fetchone();
-        cur.close();
+        row = cur.fetchone()
+        cur.close()
         conn.close()
         if row and (datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7)):
             return pickle.loads(row[0]), row[1], row[2]
@@ -144,123 +299,109 @@ def load_model_from_db(symbol, interval):
     return None
 
 
-# --- ТРЕНУВАННЯ ---
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
-    res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                       params={"symbol": f"{symbol}USDT", "interval": interval, "limit": 1500})
-    if res.status_code != 200: return None, {"reason": "Binance API unreachable"}, []
-
-    df = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
-    df.columns = ["ts", "open", "high", "low", "close", "vol"]
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+    df = fetch_binance_data(f"{symbol}USDT", interval, limit=1500)
+    if df is None: return None, {}, []
 
     df = add_core_features(df)
-    df = merge_multi_timeframe(df, symbol, interval)
+    df = merge_multi_timeframe_features(df, symbol, interval)
+    features = build_feature_list(df)
 
-    features = [c for c in df.columns if c not in ["ts", "open", "high", "low", "close", "vol", "ATR"]]
-    df["target"] = np.where(df["close"].shift(-fut_bars) > df["close"] * (1 + (df["ATR_pct"] * atr_m / 100)), 1,
-                            np.where(df["close"].shift(-fut_bars) < df["close"] * (1 - (df["ATR_pct"] * atr_m / 100)),
-                                     0, np.nan))
+    df["future_return"] = df["close"].shift(-fut_bars) / df["close"] - 1
+    thresh = (df["ATR_pct"] * atr_m) / 100.0
+    df["target"] = np.where(df["future_return"] > thresh, 1, np.where(df["future_return"] < -thresh, 0, np.nan))
 
     df = df.ffill().fillna(0)
     df_c = df.dropna(subset=["target"]).copy()
-
-    if len(df_c) < 150: return None, {"reason": f"Мало даних ({len(df_c)})"}, []
+    if len(df_c) < 150: return None, {}, []
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
     neg, pos = np.sum(y == 0), np.sum(y == 1)
-    scale_weight = float(neg / pos) if pos > 0 else 1.0
 
     tscv = TimeSeriesSplit(n_splits=3)
-    m_acc, m_pre, m_rec, m_f1 = [], [], [], []
+    cv_acc, cv_pre, cv_rec, cv_f1 = [], [], [], []
+    params = {"n_estimators": 100, "max_depth": 4, "learning_rate": 0.05,
+              "scale_pos_weight": float(neg / pos if pos > 0 else 1), "verbosity": 0}
 
     for tr_idx, val_idx in tscv.split(X):
-        tmp_m = XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.05, verbosity=0)
-        tmp_m.fit(X[tr_idx], y[tr_idx])
+        tmp_m = XGBClassifier(**params).fit(X[tr_idx], y[tr_idx])
         p = tmp_m.predict(X[val_idx])
-        m_acc.append(accuracy_score(y[val_idx], p))
-        m_pre.append(precision_score(y[val_idx], p, zero_division=0))
-        m_rec.append(recall_score(y[val_idx], p, zero_division=0))
-        m_f1.append(f1_score(y[val_idx], p, zero_division=0))
+        cv_acc.append(accuracy_score(y[val_idx], p))
+        cv_pre.append(precision_score(y[val_idx], p, zero_division=0))
+        cv_rec.append(recall_score(y[val_idx], p, zero_division=0))
+        cv_f1.append(f1_score(y[val_idx], p, zero_division=0))
 
-    final_model = XGBClassifier(n_estimators=150, max_depth=5, learning_rate=0.03, scale_pos_weight=scale_weight,
-                                verbosity=0)
-    final_model.fit(X, y)
+    final_model = XGBClassifier(**params).fit(X, y)
+    metrics = {"accuracy": round(np.mean(cv_acc) * 100, 1), "precision": round(np.mean(cv_pre) * 100, 1),
+               "recall": round(np.mean(cv_rec) * 100, 1), "f1_score": round(np.mean(cv_f1) * 100, 1)}
 
-    metrics = {
-        "accuracy": round(np.mean(m_acc) * 100, 1),
-        "precision": round(np.mean(m_pre) * 100, 1),
-        "recall": round(np.mean(m_rec) * 100, 1),
-        "f1": round(np.mean(m_f1) * 100, 1)
-    }
-
-    # Виправляємо TypeError - передаємо метрику accuracy з словника
     save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
     return final_model, metrics, features
 
 
-# --- ГОЛОВНА ФУНКЦІЯ ---
-def get_ml_signal(symbol, interval="4h"):
-    bin_sym = BINANCE_SYMBOL_MAP.get(symbol.upper(), symbol.upper())
-    mapping = {"1h": ("1h", 6, 0.5), "4h": ("4h", 8, 0.5), "1d": ("1d", 12, 0.5)}
-    act_tf, fut_bars, atr_m = mapping.get(interval, ("4h", 8, 0.5))
+# --- ГОЛОВНА ФУНКЦІЯ ПРОГНОЗУ ---
+def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.0, min_accuracy: float = 50.1) -> dict:
+    binance_sym = resolve_binance_symbol(symbol)
+    mapping = {"1M": ("1w", 4, 0.3), "1w": ("1d", 5, 0.4), "1d": ("1h", 12, 0.5), "4h": ("15m", 8, 0.5),
+               "1h": ("5m", 6, 0.5)}
+    act_tf, fut_bars, atr_m = mapping.get(interval, (interval, 3, 0.3))
 
-    cached = load_model_from_db(bin_sym, interval)
+    cached = load_model_from_db(bin_sym, act_tf)
     if cached:
         model, acc, features = cached
-        # Фоллбек метрик, якщо дістали з бази тільки accuracy
-        metrics = {"accuracy": acc, "precision": max(0, acc - 2), "recall": max(0, acc - 1), "f1": max(0, acc - 1.5)}
+        metrics = {"accuracy": acc, "precision": max(0, acc - 2), "recall": max(0, acc - 1),
+                   "f1_score": max(0, acc - 1.5)}
+        mode = "loaded_from_db"
     else:
         model, metrics, features = train_intelligent_model(bin_sym, act_tf, fut_bars, atr_m)
-        if not model:
-            return {"status": "error", "reason": metrics.get("reason", "Помилка навчання")}
+        mode = "trained_fresh"
+        if not model: return {"status": "error", "reason": "Недостатньо даних для бектесту"}
 
-    # Швидкий інференс
-    res = requests.get("https://data-api.binance.vision/api/v3/klines",
-                       params={"symbol": f"{bin_sym}USDT", "interval": act_tf, "limit": 100})
-    if res.status_code != 200: return {"status": "error", "reason": "Binance API Error"}
-
-    df_now = pd.DataFrame(res.json()).iloc[:, :6].astype(float)
-    df_now.columns = ["ts", "open", "high", "low", "close", "vol"]
-    df_now["ts"] = pd.to_datetime(df_now["ts"], unit="ms")
+    df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
     df_now = add_core_features(df_now)
-    df_now = merge_multi_timeframe(df_now, bin_sym, act_tf)
+    df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)
 
     for f in features:
         if f not in df_now.columns: df_now[f] = 0
 
-    X_now = df_now[features].iloc[-1:].fillna(0).values
-    pred = int(model.predict(X_now)[0])
-    prob = round(float(model.predict_proba(X_now)[0][pred]) * 100, 1)
+    X_pred = df_now[features].iloc[-1:].fillna(0).values
+    pred = int(model.predict(X_pred)[0])
+    prob = round(float(model.predict_proba(X_pred)[0][pred]) * 100, 1)
 
-    last = df_now.iloc[-1]
-    price = last["close"]
-    atr = last["ATR"] if pd.notna(last["ATR"]) else price * 0.02
+    final_signal = "NO TRADE ⚪" if prob < min_confidence or metrics["accuracy"] < min_accuracy else (
+        "LONG 🟢" if pred == 1 else "SHORT 🔴")
 
-    sl = price - atr * 1.5 if pred == 1 else price + atr * 1.5
-    tp = price + atr * 3.0 if pred == 1 else price - atr * 3.0
-    signal = "LONG 🟢" if pred == 1 else "SHORT 🔴"
+    last_raw = df_now.iloc[-1]
+    price = float(last_raw["close"])
+    atr = float(last_raw["ATR"]) if pd.notna(last_raw["ATR"]) else price * 0.02
+    dist_sl, dist_tp = min(atr * np.sqrt(fut_bars) * 1.0, price * 0.06), min(atr * np.sqrt(fut_bars) * 2.0,
+                                                                             price * 0.12)
 
-    # Запис у Журнал (model_predictions)
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO model_predictions (symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (symbol.upper(), interval, signal, float(price), float(prob), float(metrics["accuracy"]), float(sl),
-              float(tp)))
-        conn.commit();
-        cur.close();
-        conn.close()
-    except Exception as e:
-        print(f"Log Error: {e}")
+    sl = price - dist_sl if final_signal == "LONG 🟢" else (price + dist_sl if final_signal == "SHORT 🔴" else None)
+    tp = price + dist_tp if final_signal == "LONG 🟢" else (price - dist_tp if final_signal == "SHORT 🔴" else None)
 
-    return {
-        "status": "success", "symbol": symbol.upper(), "interval": interval, "signal": signal,
+    result = {
+        "status": "success", "symbol": symbol.upper(), "binance_symbol": f"{binance_sym}USDT", "interval": interval,
+        "signal": final_signal, "raw_prediction": "LONG" if pred == 1 else "SHORT", "mode": mode,
         "confidence": prob, "accuracy": metrics["accuracy"], "precision": metrics["precision"],
-        "recall": metrics["recall"], "f1_score": metrics["f1"], "price": price,
-        "rsi": round(last["RSI"], 1), "ema20": last["EMA_20"],
-        "bb_percent": round(last["BB_pct"] * 100, 1), "obv_trend": "↑" if last["OBV_sig"] > 0 else "↓",
-        "stop_loss": sl, "take_profit": tp, "raw_prediction": "LONG" if pred == 1 else "SHORT"
+        "recall": metrics["recall"], "f1_score": metrics["f1_score"],
+        "price": round(price, 6), "rsi": round(float(last_raw["RSI"]), 1) if pd.notna(last_raw["RSI"]) else None,
+        "ema20": round(float(last_raw["EMA_20"]), 4) if pd.notna(last_raw["EMA_20"]) else None,
+        "ema50": round(float(last_raw["EMA_50"]), 4) if pd.notna(last_raw["EMA_50"]) else None,
+        "bb_percent": round(float(last_raw["BB_percent"]) * 100, 1) if pd.notna(last_raw["BB_percent"]) else None,
+        "stoch_k": round(float(last_raw["Stoch_K"]), 1) if pd.notna(last_raw["Stoch_K"]) else None,
+        "atr_pct": round(float(last_raw["ATR_pct"]), 2) if pd.notna(last_raw["ATR_pct"]) else None,
+        "obv_trend": "↑" if float(last_raw["OBV_signal"]) > 0 else "↓",
+        "trend_strength": round(float(last_raw["trend_strength"]) * 100, 3) if pd.notna(
+            last_raw["trend_strength"]) else None,
+        "price_vs_ema20": round(float(last_raw["price_vs_ema20"]) * 100, 3) if pd.notna(
+            last_raw["price_vs_ema20"]) else None,
+        "volume_spike": round(float(last_raw["volume_spike"]), 2) if pd.notna(last_raw["volume_spike"]) else None,
+        "fake_breakout": int(last_raw["fake_breakout"]) if pd.notna(last_raw["fake_breakout"]) else 0,
+        "target_threshold_pct": round(float(last_raw["ATR_pct"]) * atr_m, 3) if pd.notna(last_raw["ATR_pct"]) else None,
+        "stop_loss": round(sl, 6) if sl else None, "take_profit": round(tp, 6) if tp else None, "risk_reward": 2.0,
+        "class_balance": {}, "top_features": [], "features_used": features,
     }
+
+    log_prediction_to_db(result)
+    return result

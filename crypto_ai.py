@@ -678,6 +678,10 @@ if user_ticker and (
             bb_pct, (int, float)) else "—"
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
 
+        # ДОДАНО: Вивід усіх індикаторів
+        extra_metrics = f"&nbsp;·&nbsp; Precision: <b>{ml_result.get('precision', '—')}%</b> &nbsp;·&nbsp; Recall: <b>{ml_result.get('recall', '—')}%</b> &nbsp;·&nbsp; F1: <b>{ml_result.get('f1_score', '—')}%</b>"
+        sltp_html = f'<div class="ml-acc">🛑 SL: <b>{safe_price(ml_result.get("stop_loss"))}</b> &nbsp;·&nbsp; 🎯 TP: <b>{safe_price(ml_result.get("take_profit"))}</b></div>'
+
         st.markdown(f"""
 <div class="ml-card" style="border-color: {signal_border};">
 <div style="font-family:'Space Mono',monospace; font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:.5rem;">⚙️ AI Прогноз · XGBoost · {safe_text(tf_label)}</div>
@@ -688,7 +692,8 @@ if user_ticker and (
 <div class="ml-chip" data-tooltip="BB%: Положення ціни відносно смуг Боллінджера."><span>BB% {safe_text(bb_text)}</span></div>
 <div class="ml-chip" data-tooltip="OBV: Балансовий обсяг. Показує тиск покупців/продавців."><span>OBV {obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
 </div>
-<div class="ml-acc">📊 Accuracy: <b>{ml_result.get('accuracy', '—')}%</b></div>
+<div class="ml-acc">📊 Accuracy: <b>{ml_result.get('accuracy', '—')}%</b> {extra_metrics}</div>
+{sltp_html}
 </div>
 """, unsafe_allow_html=True)
     else:
@@ -763,7 +768,8 @@ if user_ticker and (
     with st.expander("📜 Останні прогнози в базі даних"):
         try:
             conn = get_db_connection()
-            query = "SELECT symbol, interval, signal, price, confidence, accuracy, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
+            # ДОДАНО: Витягуємо stop_loss та take_profit для журналу
+            query = "SELECT symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
             df_logs = pd.read_sql_query(query, conn)
             if not df_logs.empty:
                 df_logs['created_at'] = pd.to_datetime(df_logs['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')

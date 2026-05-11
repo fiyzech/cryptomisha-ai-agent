@@ -1,7 +1,16 @@
-import os, io, pickle, time, warnings, requests, psycopg2
-import pandas as pd, numpy as np, streamlit as st
+import os
+import io
+import pickle
+import time
+import warnings
+import requests
+import psycopg2
+import pandas as pd
+import numpy as np
+import streamlit as st
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -10,7 +19,7 @@ warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- БД ---
+# --- ПІДКЛЮЧЕННЯ ДО БД ТА АВТО-СТВОРЕННЯ ТАБЛИЦЬ ---
 def get_db_connection():
     try:
         return psycopg2.connect(dbname=st.secrets["POSTGRES_DB"], user=st.secrets["POSTGRES_USER"],
@@ -22,11 +31,35 @@ def get_db_connection():
                                 port=os.getenv("DB_PORT"))
 
 
-BINANCE_SYMBOL_MAP = {"MATIC": "POL", "LUNA": "LUNC"}  # Тільки для перейменувань старих тікерів
+def ensure_tables_exist():
+    # Ця функція сама створить таблицю ml_models, якщо її немає, щоб не було помилок запису!
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ml_models (
+                id SERIAL PRIMARY KEY,
+                symbol VARCHAR(20) NOT NULL,
+                interval VARCHAR(10) NOT NULL,
+                model_binary BYTEA NOT NULL,
+                accuracy REAL,
+                features TEXT[],
+                trained_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(symbol, interval)
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Помилка створення таблиці: {e}")
+
+
+BINANCE_SYMBOL_MAP = {"MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB", "PEPE": "PEPE", "SUI": "SUI",
+                      "SOL": "SOL", "ETH": "ETH", "BTC": "BTC", "XRP": "XRP"}
 
 
 def log_prediction_to_db(data: dict):
-    conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -35,15 +68,14 @@ def log_prediction_to_db(data: dict):
                             float(data.get('price', 0)), float(data.get('confidence', 0)),
                             float(data.get('accuracy', 0)), data.get('raw_prediction', ''), data.get('stop_loss'),
                             data.get('take_profit')))
-        conn.commit();
+        conn.commit()
         cur.close()
+        conn.close()
     except Exception as e:
         print(f"DB Log Error: {e}")
-    finally:
-        if conn: conn.close()
 
 
-# --- МАТЕМАТИКА ---
+# --- МАТЕМАТИКА ТА ФІЧІ ---
 def calculate_rsi(series: pd.Series, period=14):
     delta = series.diff()
     gain, loss = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean(), (
@@ -78,7 +110,6 @@ def calculate_stochastic(high, low, close, k_p=14, d_p=3):
     return k, k.rolling(d_p).mean()
 
 
-# --- ДАНІ ---
 def fetch_binance_data(pair: str, interval: str, limit: int = 1500):
     url = "https://data-api.binance.vision/api/v3/klines"
     all_data, end_time, remaining = [], None, limit
@@ -154,16 +185,17 @@ def merge_multi_timeframe_features(df: pd.DataFrame, pair: str, base_interval: s
     return df
 
 
-# --- МОДЕЛІ ---
+# --- ЗБЕРЕЖЕННЯ В БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
+    ensure_tables_exist()  # Перед записом гарантуємо, що таблиця є
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP) ON CONFLICT (symbol, interval) DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP",
             (symbol, interval, psycopg2.Binary(pickle.dumps(model)), float(accuracy), [str(f) for f in features]))
-        conn.commit();
-        cur.close();
+        conn.commit()
+        cur.close()
         conn.close()
     except Exception as e:
         print(f"Save Model Error: {e}")
@@ -176,8 +208,8 @@ def load_model_from_db(symbol, interval):
         cur.execute(
             "SELECT model_binary, accuracy, features, trained_at FROM ml_models WHERE symbol = %s AND interval = %s",
             (symbol, interval))
-        row = cur.fetchone();
-        cur.close();
+        row = cur.fetchone()
+        cur.close()
         conn.close()
         if row and (datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7)): return pickle.loads(row[0]), row[1], row[
             2]
@@ -186,9 +218,10 @@ def load_model_from_db(symbol, interval):
     return None
 
 
+# --- ТРЕНУВАННЯ ---
 def train_intelligent_model(symbol, pair, interval, fut_bars, atr_m):
     df = fetch_binance_data(pair, interval, limit=1500)
-    if df is None: return None, {"reason": f"Монета {symbol} відсутня на Binance (немає пари USDT)"}, []
+    if df is None: return None, {"reason": f"Монета {symbol} відсутня на Binance"}, []
     df = add_core_features(df)
     df = merge_multi_timeframe_features(df, pair, interval)
     features = [c for c in df.columns if
@@ -200,7 +233,7 @@ def train_intelligent_model(symbol, pair, interval, fut_bars, atr_m):
 
     df = df.ffill().fillna(0)
     df_c = df.dropna(subset=["target"]).copy()
-    if len(df_c) < 150: return None, {"reason": "Недостатньо даних для навчання"}, []
+    if len(df_c) < 150: return None, {"reason": "Недостатньо даних"}, []
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
     neg, pos = np.sum(y == 0), np.sum(y == 1)
@@ -221,6 +254,7 @@ def train_intelligent_model(symbol, pair, interval, fut_bars, atr_m):
     final_model = XGBClassifier(**params).fit(X, y)
     metrics = {"accuracy": round(np.mean(cv_acc) * 100, 1), "precision": round(np.mean(cv_pre) * 100, 1),
                "recall": round(np.mean(cv_rec) * 100, 1), "f1_score": round(np.mean(cv_f1) * 100, 1)}
+
     save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
     return final_model, metrics, features
 
@@ -262,10 +296,11 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     last_raw = df_now.iloc[-1]
     price = float(last_raw["close"])
     atr = float(last_raw["ATR"]) if pd.notna(last_raw["ATR"]) else price * 0.02
-    sl = price - (atr * 1.5) if final_signal == "LONG 🟢" else (
-        price + (atr * 1.5) if final_signal == "SHORT 🔴" else None)
-    tp = price + (atr * 3.0) if final_signal == "LONG 🟢" else (
-        price - (atr * 3.0) if final_signal == "SHORT 🔴" else None)
+    dist_sl = min(atr * np.sqrt(fut_bars) * 1.0, price * 0.06)
+    dist_tp = min(atr * np.sqrt(fut_bars) * 2.0, price * 0.12)
+
+    sl = price - dist_sl if final_signal == "LONG 🟢" else (price + dist_sl if final_signal == "SHORT 🔴" else None)
+    tp = price + dist_tp if final_signal == "LONG 🟢" else (price - dist_tp if final_signal == "SHORT 🔴" else None)
 
     result = {
         "status": "success", "symbol": symbol.upper(), "binance_symbol": pair, "interval": interval,

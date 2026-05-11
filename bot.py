@@ -5,8 +5,6 @@ import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from ml_engine import get_ml_signal
 
-
-# === ЗАГЛУШКА ДЛЯ RENDER (Щоб безкоштовний сервер не падав) ===
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)

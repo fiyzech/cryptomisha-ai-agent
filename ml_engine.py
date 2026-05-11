@@ -52,14 +52,7 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-# Очисник значень для БД (захищає від крашів)
-def clean_float(val):
-    if val is None or pd.isna(val):
-        return None
-    return float(val)
-
-
-# --- ЗАПИС В model_predictions ---
+# --- ЗАПИС В ЖУРНАЛ (БРОНЕБІЙНИЙ ВІД NP.FLOAT64) ---
 def log_prediction_to_db(data: dict):
     conn = None
     try:
@@ -71,17 +64,24 @@ def log_prediction_to_db(data: dict):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
+        # Ось цей магічний фільтр, який я забув вставити минулого разу!
+        def safe_float(val):
+            if val is None or pd.isna(val):
+                return None
+            return float(val)
+
         values = (
             str(data.get('symbol', '')),
             str(data.get('interval', '')),
             str(data.get('signal', '')),
-            clean_float(data.get('price')),
-            clean_float(data.get('confidence')),
-            clean_float(data.get('accuracy')),
+            safe_float(data.get('price')),
+            safe_float(data.get('confidence')),
+            safe_float(data.get('accuracy')),
             str(data.get('raw_prediction', '')),
-            clean_float(data.get('stop_loss')),
-            clean_float(data.get('take_profit'))
+            safe_float(data.get('stop_loss')),
+            safe_float(data.get('take_profit'))
         )
+
         cursor.execute(query, values)
         conn.commit()
         cursor.close()
@@ -277,7 +277,7 @@ def build_feature_list(df: pd.DataFrame):
     return features
 
 
-# --- ЗБЕРЕЖЕННЯ "МІЗКІВ" ---
+# --- ЗБЕРЕЖЕННЯ І ЗАВАНТАЖЕННЯ МОДЕЛЕЙ З БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -285,12 +285,16 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
         model_bytes = pickle.dumps(model)
         safe_features = [str(f) for f in features]
 
+        def safe_float(val):
+            if val is None or pd.isna(val): return None
+            return float(val)
+
         cur.execute("DELETE FROM ml_models WHERE symbol = %s AND interval = %s", (symbol, interval))
 
         cur.execute("""
             INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        """, (symbol, interval, psycopg2.Binary(model_bytes), clean_float(accuracy), safe_features))
+        """, (symbol, interval, psycopg2.Binary(model_bytes), safe_float(accuracy), safe_features))
 
         conn.commit()
         cur.close()
@@ -372,7 +376,6 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
 def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.0, min_accuracy: float = 50.1) -> dict:
     binance_sym = resolve_binance_symbol(symbol)
 
-    # Визначаємо "робочий" таймфрейм для моделі
     mapping = {"1M": ("1w", 4, 0.3), "1w": ("1d", 5, 0.4), "1d": ("1d", 3, 0.4), "4h": ("15m", 8, 0.5),
                "1h": ("5m", 6, 0.5)}
     act_tf, fut_bars, atr_m = mapping.get(interval, (interval, 3, 0.3))

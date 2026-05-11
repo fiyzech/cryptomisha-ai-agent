@@ -10,9 +10,9 @@ from ml_engine import get_ml_signal
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
-        self.wfile.write(b"CryptoMisha Bot is running and analyzing markets! 🚀")
+        self.wfile.write("CryptoMisha Bot is running and analyzing markets! 🚀".encode('utf-8'))
 
 
 def run_dummy_server():
@@ -23,7 +23,8 @@ def run_dummy_server():
 
 # ===============================================================
 
-INTERVALS = ["4h", "1d", "1w", "1m"]
+# ОСЬ ТУТ ПРОПИСАНІ ТВОЇ 4 ТАЙМФРЕЙМИ: 4 години, 1 день, 1 тиждень, 1 місяць
+INTERVALS = ["4h", "1d", "1w", "1M"]
 IGNORED_STABLECOINS = ['USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD', 'USDD', 'USDS']
 
 

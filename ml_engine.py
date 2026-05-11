@@ -4,6 +4,7 @@ import pickle
 import warnings
 import requests
 import psycopg2
+import pytz
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -52,7 +53,7 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-# --- ЗАПИС В ЖУРНАЛ (БРОНЕБІЙНИЙ ВІД NP.FLOAT64) ---
+# --- ЗАПИС В ЖУРНАЛ (БРОНЕБІЙНИЙ ВІД NP.FLOAT64 + ЛЬВІВСЬКИЙ ЧАС) ---
 def log_prediction_to_db(data: dict):
     conn = None
     try:
@@ -60,15 +61,17 @@ def log_prediction_to_db(data: dict):
         cursor = conn.cursor()
         query = """
             INSERT INTO model_predictions 
-            (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
-        # Ось цей магічний фільтр, який я забув вставити минулого разу!
         def safe_float(val):
             if val is None or pd.isna(val):
                 return None
             return float(val)
+
+        # Беремо точний наш час і передаємо в БД
+        kyiv_time = datetime.now(pytz.timezone('Europe/Kyiv')).strftime('%Y-%m-%d %H:%M:%S')
 
         values = (
             str(data.get('symbol', '')),
@@ -79,7 +82,8 @@ def log_prediction_to_db(data: dict):
             safe_float(data.get('accuracy')),
             str(data.get('raw_prediction', '')),
             safe_float(data.get('stop_loss')),
-            safe_float(data.get('take_profit'))
+            safe_float(data.get('take_profit')),
+            kyiv_time
         )
 
         cursor.execute(query, values)
@@ -277,7 +281,6 @@ def build_feature_list(df: pd.DataFrame):
     return features
 
 
-# --- ЗБЕРЕЖЕННЯ І ЗАВАНТАЖЕННЯ МОДЕЛЕЙ З БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -291,10 +294,12 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
 
         cur.execute("DELETE FROM ml_models WHERE symbol = %s AND interval = %s", (symbol, interval))
 
+        kyiv_time = datetime.now(pytz.timezone('Europe/Kyiv')).strftime('%Y-%m-%d %H:%M:%S')
+
         cur.execute("""
             INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        """, (symbol, interval, psycopg2.Binary(model_bytes), safe_float(accuracy), safe_features))
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (symbol, interval, psycopg2.Binary(model_bytes), safe_float(accuracy), safe_features, kyiv_time))
 
         conn.commit()
         cur.close()

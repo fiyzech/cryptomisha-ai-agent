@@ -251,9 +251,6 @@ div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summa
 .stButton > button { background: linear-gradient(90deg, #2C1969 0%, #8348C1 50%, #C38BFF 100%) !important; color: #FFFFFF !important; border: none !important; border-radius: 28px !important; font-weight: 500 !important; font-size: 14px !important; height: 44px !important; padding: 0 24px !important; transition-property: transform !important; transition-duration: 150ms !important; }
 .stButton > button:hover { transform: scale(1.05) !important; }
 
-.btn-secondary > button { background: transparent !important; border: 1px solid rgba(255,255,255,0.2) !important; }
-.btn-secondary > button:hover { border-color: #C38BFF !important; }
-
 .divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
 .hint { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; cursor: default; }
 .thinking { color: var(--muted); font-style: italic; animation: pulse 1.5s infinite; }
@@ -273,7 +270,6 @@ def safe_text(value) -> str:
         return "—"
     return html.escape(str(value)).replace("\n", "<br>")
 
-
 def safe_price(value) -> str:
     if value is None:
         return "—"
@@ -287,7 +283,6 @@ def safe_price(value) -> str:
         return f"${value:.4f}"
     return f"${value:.8f}"
 
-
 def safe_url(url: str) -> str:
     if not url:
         return "#"
@@ -296,30 +291,29 @@ def safe_url(url: str) -> str:
         return html.escape(url, quote=True)
     return "#"
 
-
 def fmt_price(v: float) -> str:
     try:
         v = float(v)
     except:
         return "—"
+
     if v >= 1:
         return f"${v:,.2f}"
     if v >= 0.01:
         return f"${v:.4f}"
     return f"${v:.8f}"
 
-
 def fmt_large(v: float) -> str:
     try:
         v = float(v)
     except:
         return "—"
+
     if v >= 1e9:
         return f"${v / 1e9:.2f}B"
     if v >= 1e6:
         return f"${v / 1e6:.2f}M"
     return f"${v:,.0f}"
-
 
 COIN_ALIASES = {
     "BTC": ["btc", "bitcoin", "біткоїн", "биткоин", "біткоін"],
@@ -357,7 +351,6 @@ COIN_ALIASES = {
     "RENDER": ["render", "rndr"],
 }
 
-
 @st.cache_data(ttl=86400)
 def get_all_valid_tickers():
     try:
@@ -369,34 +362,37 @@ def get_all_valid_tickers():
         pass
     return {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "SUI"}
 
-
 def extract_coin_from_question(text: str):
     if not text:
         return None
+
     q = text.lower()
-    for symbol, aliases in COIN_ALIitems():
+    for symbol, aliases in COIN_ALIASES.items():
         for alias in aliases:
             alias_lower = alias.lower()
             if alias_lower in q:
                 return symbol
+
     valid_tickers = get_all_valid_tickers()
+
     cleaned = (
         text.replace("?", " ").replace(",", " ").replace(".", " ").replace("!", " ")
         .replace(":", " ").replace(";", " ").replace("/", " ").replace("\\", " ")
     )
     words = cleaned.split()
+
     bad_words = {
         "ЯКА", "ЦІНА", "ЗАРАЗ", "ЩО", "ПО", "ЯК", "ЧОМУ", "КОЛИ",
         "МОЖЕ", "БУТИ", "ДАЙ", "СКАЖИ", "ПІДКАЖИ", "ЦЕ", "НЕ",
         "НА", "ТА", "І", "В", "У", "ДЛЯ", "ПРО", "МЕНІ"
     }
+
     for word in words:
         clean = word.upper().strip()
         if 2 <= len(clean) <= 8 and clean.isalpha() and clean not in bad_words:
             if clean in valid_tickers:
                 return clean
     return None
-
 
 @st.cache_data(ttl=15, show_spinner=False)
 def get_realtime_binance_price(symbol: str):
@@ -405,11 +401,7 @@ def get_realtime_binance_price(symbol: str):
     symbol = symbol.upper().strip()
     pair = f"{symbol}USDT"
     try:
-        r = requests.get(
-            "https://data-api.binance.vision/api/v3/ticker/24hr",
-            params={"symbol": pair},
-            timeout=7
-        )
+        r = requests.get("https://data-api.binance.vision/api/v3/ticker/24hr", params={"symbol": pair}, timeout=7)
         if r.status_code == 200:
             data = r.json()
             return {
@@ -420,12 +412,11 @@ def get_realtime_binance_price(symbol: str):
                 "high_24h": float(data.get("highPrice", 0)),
                 "low_24h": float(data.get("lowPrice", 0)),
                 "volume": float(data.get("quoteVolume", 0)),
-                "source": "Ринкові дані"
+                "source": "Binance"
             }
     except Exception:
         pass
     return None
-
 
 def build_realtime_price_context(user_question: str):
     symbol = extract_coin_from_question(user_question)
@@ -433,31 +424,30 @@ def build_realtime_price_context(user_question: str):
         return ""
     data = get_realtime_binance_price(symbol)
     if not data:
-        return f"Користувач питає про монету {symbol}, але актуальну ціну зараз отримати не вдалося. Не вигадуй ціну."
+        return f"Користувач, можливо, питає про монету {symbol}, але актуальну ціну з Binance зараз отримати не вдалося.\nНе вигадуй точну ціну."
 
     return f"""
 ВАЖЛИВО: користувач питає про монету {data['symbol']}.
-Ось АКТУАЛЬНІ {data['source']}:
+Ось АКТУАЛЬНІ ринкові дані з {data['source']}:
+- Пара: {data['pair']}
 - Поточна ціна: {fmt_price(data['price'])}
 - Зміна за 24г: {data['change_24h']:+.2f}%
 - Мінімум 24г: {fmt_price(data['low_24h'])}
 - Максимум 24г: {fmt_price(data['high_24h'])}
+- Обсяг 24г: {fmt_large(data['volume'])}
 
-Якщо користувач питає "яка ціна", відповідай саме цією ціною. Не вигадуй.
+Якщо користувач питає "яка ціна", відповідай саме цією ціною. Не вигадуй іншу ціну.
 """
-
 
 def rsi_color(rsi: float) -> str:
     if rsi >= 70: return "#FF3B30"
     if rsi <= 30: return "#00E676"
     return "#A3A4B0"
 
-
 def get_signal_style(signal: str):
     if "LONG" in signal: return "ml-signal-long", "#00E676"
     if "SHORT" in signal: return "ml-signal-short", "#FF3B30"
     return "ml-signal-neutral", "#fbbf24"
-
 
 @st.cache_data(ttl=86400)
 def get_binance_tickers():
@@ -490,7 +480,6 @@ def get_binance_tickers():
         if b_r.status_code == 200:
             symbols = b_r.json().get("symbols", [])
             tickers = set()
-
             for s in symbols:
                 if s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING":
                     tickers.add(s.get("baseAsset"))
@@ -501,10 +490,8 @@ def get_binance_tickers():
             ]
 
             final_list = []
-
             def fmt(t):
-                if t in names_dict and names_dict[t].upper() != t:
-                    return f"{t} ({names_dict[t]})"
+                if t in names_dict and names_dict[t].upper() != t: return f"{t} ({names_dict[t]})"
                 return t
 
             for coin in top_coins_to_sort:
@@ -519,7 +506,6 @@ def get_binance_tickers():
 
     return ["BTC (Bitcoin)", "ETH (Ethereum)", "SOL (Solana)", "SUI (Sui)"]
 
-
 @st.cache_data(ttl=3600)
 def search_coingecko_id(query: str):
     if not query: return None, None
@@ -529,46 +515,30 @@ def search_coingecko_id(query: str):
             coins = r.json().get("coins", [])
             if coins:
                 for c in coins:
-                    if c.get("symbol", "").upper() == query.upper():
-                        return c.get("id"), c.get("name")
+                    if c.get("symbol", "").upper() == query.upper(): return c.get("id"), c.get("name")
                 return coins[0].get("id"), coins[0].get("name")
     except Exception:
         pass
     return None, None
 
-
 @st.cache_data(ttl=30)
 def get_coin_data(coin_id: str):
     try:
-        r = requests.get(
-            f"{COINGECKO_BASE}/coins/{coin_id}",
-            params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "false"},
-            timeout=10
-        )
+        r = requests.get(f"{COINGECKO_BASE}/coins/{coin_id}", params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "false"}, timeout=10)
         return r.json() if r.status_code == 200 else None
-    except Exception:
-        return None
-
+    except Exception: return None
 
 @st.cache_data(ttl=120)
 def get_sparkline(coin_id: str):
     try:
-        r = requests.get(
-            f"{COINGECKO_BASE}/coins/{coin_id}/market_chart",
-            params={"vs_currency": "usd", "days": "7", "interval": "daily"},
-            timeout=10
-        )
-        if r.status_code == 200:
-            return [p[1] for p in r.json().get("prices", [])]
+        r = requests.get(f"{COINGECKO_BASE}/coins/{coin_id}/market_chart", params={"vs_currency": "usd", "days": "7", "interval": "daily"}, timeout=10)
+        if r.status_code == 200: return [p[1] for p in r.json().get("prices", [])]
         return []
-    except Exception:
-        return []
-
+    except Exception: return []
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_ml_signal_cached(symbol: str, interval: str):
     return get_ml_signal(symbol, interval)
-
 
 def translate_to_uk(text: str) -> str:
     if not text or text == "Без заголовку": return text
@@ -576,12 +546,9 @@ def translate_to_uk(text: str) -> str:
         url = "https://translate.googleapis.com/translate_a/single"
         params = {"client": "gtx", "sl": "auto", "tl": "uk", "dt": "t", "q": text}
         r = requests.get(url, params=params, timeout=3)
-        if r.status_code == 200:
-            return "".join([s[0] for s in r.json()[0]])
-    except Exception:
-        pass
+        if r.status_code == 200: return "".join([s[0] for s in r.json()[0]])
+    except Exception: pass
     return text
-
 
 @st.cache_data(ttl=1800)
 def get_crypto_news(coin_name: str, symbol: str = ""):
@@ -590,8 +557,7 @@ def get_crypto_news(coin_name: str, symbol: str = ""):
     try:
         r = requests.get(
             "https://newsapi.org/v2/everything",
-            params={"q": query, "sortBy": "publishedAt", "language": "en", "pageSize": 3, "apiKey": NEWSAPI_KEY},
-            timeout=10
+            params={"q": query, "sortBy": "publishedAt", "language": "en", "pageSize": 3, "apiKey": NEWSAPI_KEY}, timeout=10
         )
         if r.status_code != 200: return []
         articles = r.json().get("articles", [])
@@ -602,14 +568,12 @@ def get_crypto_news(coin_name: str, symbol: str = ""):
             seen.add(title)
             ukr_title = translate_to_uk(title)
             cleaned.append({
-                "title": ukr_title,
-                "url": a.get("url", ""),
+                "title": ukr_title, "url": a.get("url", ""),
+                "source": {"name": a.get("source", {}).get("name", "Unknown")},
                 "publishedAt": a.get("publishedAt", "")
             })
         return cleaned
-    except Exception:
-        return []
-
+    except Exception: return []
 
 def stream_ollama(prompt: str):
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "").strip()
@@ -621,8 +585,7 @@ def stream_ollama(prompt: str):
     data = {"model": MODEL_NAME, "messages": [{"role": "user", "content": prompt}], "temperature": 0.25, "stream": True}
 
     try:
-        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True,
-                            timeout=30)
+        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True, timeout=30)
         if res.status_code != 200:
             yield f"⚠️ Помилка AI: {res.text}"
             return
@@ -636,16 +599,12 @@ def stream_ollama(prompt: str):
                         chunk = json.loads(decoded_line[6:])
                         delta = chunk["choices"][0]["delta"].get("content", "")
                         if delta: yield delta
-                    except:
-                        pass
+                    except: pass
     except Exception as e:
         yield f"⚠️ Технічна помилка: {e}"
 
-
-def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
-                          news):
-    news_text = "Актуальні новини по монеті:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]) if news else "Специфічних новин зараз немає."
+def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news):
+    news_text = "Актуальні новини по монеті:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Специфічних новин зараз немає."
     return f"""Ти — Міша, фінансовий AI-асистент. Пиши чистою українською. Стиль: коротко, впевнено, живо, без води.
 Проаналізуй {name} ({symbol}) на основі цих даних:
 - Ціна: {fmt_price(price)}
@@ -661,13 +620,9 @@ def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, 
 
 Напиши короткий живий огляд у 4-5 реченнях. Не давай фінансову пораду, але поясни ситуацію зрозуміло."""
 
-
 def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news, history, user_q):
-    history_text = "\n".join(
-        [f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in
-         history[-6:]])
-    news_text = "Останні заголовки новин:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
+    history_text = "\n".join([f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in history[-6:]])
+    news_text = "Останні заголовки новин:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
     realtime_context = build_realtime_price_context(user_q)
     return f"""Ти — Міша, CryptoMisha AI.
 Твій стиль: українська мова; коротко, живо, по ділу; трохи зухвало, але без токсичності; не повторюй постійно привітання.
@@ -683,11 +638,8 @@ def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news
 Запит користувача: {user_q}
 Відповідь Міші:"""
 
-
-for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []),
-                     ("cg_name", None), ("generate_new", False), ("selected_interval", "4h")]:
+for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []), ("cg_name", None), ("generate_new", False), ("selected_interval", "4h")]:
     if key not in st.session_state: st.session_state[key] = default
-
 
 def handle_chat_submit():
     user_val = st.session_state.chat_input_widget
@@ -696,18 +648,13 @@ def handle_chat_submit():
         st.session_state.generate_new = True
     st.session_state.chat_input_widget = ""
 
-
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
 
-# Оновлена сітка колонок, щоб вмістити кнопку скидання кешу
-col1, col2, col3, col4 = st.columns([3, 1.2, 1.2, 1.2])
+col1, col2, col3 = st.columns([3, 1, 1])
 
 with col1:
     tickers_list = get_binance_tickers()
-    raw_selection = st.selectbox(
-        "Пошук монети", options=tickers_list, index=None,
-        placeholder="🔍 Введи назву або тікер (наприклад: BTC, SOL, PEPE...)", label_visibility="collapsed"
-    )
+    raw_selection = st.selectbox("Пошук монети", options=tickers_list, index=None, placeholder="🔍 Введи назву або тікер...", label_visibility="collapsed")
     user_ticker = raw_selection.split(" ")[0] if raw_selection else ""
 
 with col2:
@@ -717,15 +664,7 @@ with col2:
 with col3:
     analyze_btn = st.button("⚡ Аналізувати", use_container_width=True)
 
-with col4:
-    st.markdown('<div class="btn-secondary">', unsafe_allow_html=True)
-    if st.button("🔄 Скинути кеш", use_container_width=True):
-        st.cache_data.clear()
-        st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
-
-if user_ticker and (
-        analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))):
+if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))):
     if analyze_btn or st.session_state.current_coin != user_ticker:
         with st.spinner(f"Шукаю {user_ticker} на біржах..."):
             cg_id, cg_name = search_coingecko_id(user_ticker)
@@ -733,7 +672,7 @@ if user_ticker and (
                 data, prices = get_coin_data(cg_id), get_sparkline(cg_id)
             else:
                 data, prices = None, []
-                st.warning(f"⚠️ Не знайшов графіків для '{user_ticker}', але продовжую аналіз!")
+                st.warning(f"⚠️ Не знайшов графіків для '{user_ticker}' на CoinGecko, але продовжую аналіз!")
 
             st.session_state.coin_data = data
             st.session_state.current_coin = user_ticker
@@ -804,7 +743,7 @@ if user_ticker and (
 
         st.markdown(f"""
         <div class="card">
-            <div class="card-title">{safe_text(display_name)} · Актуальні дані · {safe_text(user_ticker)}/USDT</div>
+            <div class="card-title">{safe_text(display_name)} · Binance · {safe_text(user_ticker)}/USDT</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
                 <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
@@ -828,7 +767,7 @@ if user_ticker and (
     """
     components.html(tv_html, height=420)
 
-    with st.spinner(f"🧠 ML-модель аналізує дані та розраховує прогноз ({tf_label})..."):
+    with st.spinner(f"🧠 ML-модель збирає дані з Binance та розраховує прогноз ({tf_label})..."):
         ml_result = get_ml_signal_cached(user_ticker, selected_interval)
         st.session_state.ml_result = ml_result
 
@@ -841,8 +780,7 @@ if user_ticker and (
         rsi_c = rsi_color(rsi_val) if isinstance(rsi_val, (int, float)) else "#e2e8f0"
         bb_pct = ml_result.get("bb_percent")
 
-        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(
-            bb_pct, (int, float)) else "—"
+        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(bb_pct, (int, float)) else "—"
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
 
         # ПОВНИЙ БЛОК ІНДИКАТОРІВ, ТУЛТІПІВ ТА SL/TP
@@ -891,11 +829,8 @@ if user_ticker and (
 """, unsafe_allow_html=True)
 
         if ml_result.get("top_features"):
-            top_feats = ", ".join(
-                [f"{f['feature']} ({round(f['importance'] * 100, 1)}%)" for f in ml_result["top_features"][:5]])
-            st.markdown(
-                f'<div class="hint"><span data-tooltip="Дані та індикатори, які мали найбільший вплив на рішення">Найважливіші фічі моделі: {safe_text(top_feats)}</span></div>',
-                unsafe_allow_html=True)
+            top_feats = ", ".join([f"{f['feature']} ({round(f['importance'] * 100, 1)}%)" for f in ml_result["top_features"][:5]])
+            st.markdown(f'<div class="hint"><span data-tooltip="Дані та індикатори, які мали найбільший вплив на рішення">Найважливіші фічі моделі: {safe_text(top_feats)}</span></div>', unsafe_allow_html=True)
     else:
         st.error(f"❌ ML прогноз недоступний: {ml_result.get('reason', 'невідома причина')}")
 
@@ -922,19 +857,14 @@ if user_ticker and (
     analysis_key = f"analysis_{user_ticker}"
 
     if analyze_btn or analysis_key not in st.session_state:
-        prompt = build_analysis_prompt(display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h,
-                                       high_24h, spark_info, news_articles)
+        prompt = build_analysis_prompt(display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news_articles)
         analysis_placeholder = st.empty()
-        analysis_placeholder.markdown(
-            f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div><span class="thinking">Міша аналізує графіки та новини... 🤔</span></div>',
-            unsafe_allow_html=True)
+        analysis_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div><span class="thinking">Міша аналізує графіки та новини... 🤔</span></div>', unsafe_allow_html=True)
 
         full_analysis = ""
         for chunk in stream_ollama(prompt):
             full_analysis += chunk
-            analysis_placeholder.markdown(
-                f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>{safe_text(full_analysis)}</div>',
-                unsafe_allow_html=True)
+            analysis_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>{safe_text(full_analysis)}</div>', unsafe_allow_html=True)
 
         st.session_state[analysis_key] = full_analysis
         st.session_state.messages = [{"role": "ai", "content": full_analysis, "label": f"📊 Аналіз {display_name}"}]
@@ -942,59 +872,27 @@ if user_ticker and (
 
     for msg in st.session_state.messages:
         if msg["role"] == "ai":
-            st.markdown(
-                f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · {safe_text(msg.get("label", "Відповідь"))}</div>{safe_text(msg["content"])}</div>',
-                unsafe_allow_html=True)
+            st.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · {safe_text(msg.get("label", "Відповідь"))}</div>{safe_text(msg["content"])}</div>', unsafe_allow_html=True)
         else:
-            st.markdown(
-                f'<div class="msg-user"><div class="msg-label msg-label-user">▸ Ти</div>{safe_text(msg["content"])}</div>',
-                unsafe_allow_html=True)
+            st.markdown(f'<div class="msg-user"><div class="msg-label msg-label-user">▸ Ти</div>{safe_text(msg["content"])}</div>', unsafe_allow_html=True)
 
     if st.session_state.generate_new:
-        chat_prompt = build_chat_prompt(display_name, user_ticker, price, change_24h, cap, vol, change_7d,
-                                        news_articles, st.session_state.messages[:-1],
-                                        st.session_state.messages[-1]["content"])
+        chat_prompt = build_chat_prompt(display_name, user_ticker, price, change_24h, cap, vol, change_7d, news_articles, st.session_state.messages[:-1], st.session_state.messages[-1]["content"])
         chat_placeholder = st.empty()
-        chat_placeholder.markdown(
-            '<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div><span class="thinking">Міша думає... 🤔</span></div>',
-            unsafe_allow_html=True)
+        chat_placeholder.markdown('<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div><span class="thinking">Міша думає... 🤔</span></div>', unsafe_allow_html=True)
 
         full_answer = ""
         for chunk in stream_ollama(chat_prompt):
             full_answer += chunk
-            chat_placeholder.markdown(
-                f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>{safe_text(full_answer)}</div>',
-                unsafe_allow_html=True)
+            chat_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>{safe_text(full_answer)}</div>', unsafe_allow_html=True)
 
         st.session_state.messages.append({"role": "ai", "content": full_answer, "label": "Відповідь"})
         st.session_state.generate_new = False
         st.rerun()
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
-    st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit,
-                  label_visibility="collapsed")
-    st.markdown('<div class="hint" style="cursor: default;">↵ Enter — надіслати повідомлення</div>',
-                unsafe_allow_html=True)
-
-    with st.expander("📜 Журнал логів (Supabase)"):
-        try:
-            conn = get_db_connection()
-            query = "SELECT symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
-            df_logs = pd.read_sql_query(query, conn)
-            if not df_logs.empty:
-                # КОНВЕРТАЦІЯ В ЧАС ЛЬВОВА
-                df_logs['created_at'] = pd.to_datetime(df_logs['created_at'])
-                if df_logs['created_at'].dt.tz is None:
-                    df_logs['created_at'] = df_logs['created_at'].dt.tz_localize('UTC')
-                df_logs['created_at'] = df_logs['created_at'].dt.tz_convert('Europe/Kyiv').dt.strftime(
-                    '%Y-%m-%d %H:%M:%S')
-
-                st.dataframe(df_logs, use_container_width=True, hide_index=True)
-            else:
-                st.write("Журнал порожній.")
-            conn.close()
-        except Exception as e:
-            st.error(f"Помилка підключення до БД: {e}")
+    st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit, label_visibility="collapsed")
+    st.markdown('<div class="hint" style="cursor: default;">↵ Enter — надіслати повідомлення</div>', unsafe_allow_html=True)
 
 else:
     st.markdown(f"""

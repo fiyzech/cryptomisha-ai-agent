@@ -10,14 +10,13 @@ import streamlit.components.v1 as components
 
 from ml_engine import get_ml_signal, get_db_connection
 
-# Змінні оточення
+# Змінні оточення для підключення до БД
 DB_USER = os.getenv("POSTGRES_USER", "CryptoPulse_admin")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("POSTGRES_DB", "CryptoPulse_db")
 
-# 👑 ІКОНКА ТА НАЛАШТУВАННЯ СТОРІНКИ
 st.set_page_config(
     page_title="CryptoMisha AI",
     page_icon="logo.svg",
@@ -37,7 +36,7 @@ TIMEFRAME_OPTIONS = {
     "1 місяць": "1M"
 }
 
-# --- ПОТУЖНИЙ CSS ДЛЯ ДИЗАЙНУ ---
+# --- ПОТУЖНИЙ CSS ДЛЯ ДИЗАЙНУ ТА ФІКСУ БІЛИХ СПИСКІВ ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap');
@@ -60,17 +59,47 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
     color: var(--text);
 }
 
-.stApp { background-color: var(--bg) !important; }
+.stApp { 
+    background-color: var(--bg) !important; 
+}
 
-/* Приховуємо весь стандартний UI Streamlit (меню, футери, manage app) */
-header, footer, #MainMenu, .stAppDeployButton { visibility: hidden !important; display: none !important; }
+.material-symbols-rounded, .material-icons, summary span { 
+    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important; 
+}
 
-.block-container { padding: 2rem 2rem 4rem; max-width: 1100px; }
+.hint, .ml-acc, .card-title, .msg-label, .price-big, .chip-label { 
+    font-family: 'Space Mono', monospace !important; 
+}
+
+#MainMenu, footer, header { 
+    visibility: hidden; 
+}
+
+.block-container { 
+    padding: 2rem 2rem 4rem; 
+    max-width: 1100px; 
+}
 
 .hero-title { 
-    font-size: 2.8rem; font-weight: 800; color: #FFFFFF; margin-bottom: 2rem; display: flex; align-items: center; gap: 12px; 
+    font-size: 2.8rem; 
+    font-weight: 800; 
+    color: #FFFFFF; 
+    margin-bottom: 0; 
+    display: flex; 
+    align-items: center; 
+    gap: 12px; 
 }
-.hero-title::before { content: '✦'; color: #8348C1; }
+
+.hero-title::before { 
+    content: '✦'; 
+    color: #8348C1; 
+}
+
+.hero-sub { 
+    color: var(--muted); 
+    font-size: 0.85rem; 
+    margin-bottom: 2rem; 
+}
 
 .card, .ml-card, .news-card {
     background: var(--surface) !important; 
@@ -82,19 +111,56 @@ header, footer, #MainMenu, .stAppDeployButton { visibility: hidden !important; d
 }
 
 .card::before, .ml-card::before, .news-card::before {
-    content: ""; position: absolute; inset: 0; border-radius: 16px; padding: 1px; 
+    content: ""; 
+    position: absolute; 
+    inset: 0; 
+    border-radius: 16px; 
+    padding: 1px; 
     background: linear-gradient(90deg, rgba(82,46,139,0.32), rgba(179,179,179,0.32));
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); 
-    -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
+    -webkit-mask-composite: xor; 
+    mask-composite: exclude; 
+    pointer-events: none;
 }
 
-.card-title { font-size: 0.85rem; font-weight: 500; color: var(--muted); margin-bottom: 0.5rem; display: flex; justify-content: space-between; }
-.price-big { font-size: 2.6rem; font-weight: 800; color: var(--green); }
+.card-title { 
+    font-size: 0.85rem; 
+    font-weight: 500; 
+    color: var(--muted); 
+    margin-bottom: 0.5rem; 
+    display: flex; 
+    justify-content: space-between; 
+}
+
+.price-big { 
+    font-size: 2.6rem; 
+    font-weight: 800; 
+    color: var(--green); 
+}
+
 .change-pos { color: var(--green) !important; font-weight: 600; }
 .change-neg { color: var(--red) !important; font-weight: 600; }
 
-.msg-user { background: rgba(131,72,193,0.1); border: 1px solid rgba(131,72,193,0.3); border-radius: 12px; padding: 1rem 1.2rem; margin: 0.75rem 0; font-size: 0.95rem; }
-.msg-ai { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.2rem; margin: 0.75rem 0; font-size: 0.95rem; line-height: 1.7; box-shadow: 0 8px 25px rgba(0,0,0,0.2); }
+.msg-user { 
+    background: rgba(131,72,193,0.1); 
+    border: 1px solid rgba(131,72,193,0.3); 
+    border-radius: 12px; 
+    padding: 1rem 1.2rem; 
+    margin: 0.75rem 0; 
+    font-size: 0.95rem; 
+}
+
+.msg-ai { 
+    background: var(--surface); 
+    border: 1px solid var(--border); 
+    border-radius: 12px; 
+    padding: 1rem 1.2rem; 
+    margin: 0.75rem 0; 
+    font-size: 0.95rem; 
+    line-height: 1.7; 
+    box-shadow: 0 8px 25px rgba(0,0,0,0.2); 
+}
+
 .msg-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
 .msg-label-ai { color: var(--accent); } 
 .msg-label-user { color: #FFFFFF; }
@@ -113,22 +179,72 @@ header, footer, #MainMenu, .stAppDeployButton { visibility: hidden !important; d
 [data-tooltip] { position: relative; cursor: help; }
 [data-tooltip]:hover::after {
     content: attr(data-tooltip); position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
-    background-color: #050506 !important; border: 1px solid #8348C1; color: #FFFFFF; padding: 10px 14px; border-radius: 8px; font-size: 12px; font-weight: 500; font-family: 'Montserrat', sans-serif !important; white-space: normal; width: max-content; max-width: 250px; z-index: 99999; box-shadow: 0 10px 30px rgba(0,0,0,0.8); line-height: 1.4; text-align: left;
+    background-color: #050506 !important; border: 1px solid #8348C1; color: #FFFFFF; padding: 10px 14px; border-radius: 8px; font-size: 12px;
+    font-weight: 500; font-family: 'Montserrat', sans-serif !important; white-space: normal; width: max-content; max-width: 250px;
+    z-index: 99999; box-shadow: 0 10px 30px rgba(0,0,0,0.8); line-height: 1.4; text-align: left;
 }
 
-.ml-chip { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.8rem; font-size: 0.8rem; font-family: 'Space Mono', monospace !important; }
+.ml-chip { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 0.4rem 0.8rem; font-size: 0.8rem; }
 .ml-chip-label { color: var(--muted); margin-right: 4px; }
-.ml-acc { font-size: 0.75rem; color: var(--muted); margin-top: 0.8rem; font-family: 'Space Mono', monospace !important; }
+.ml-acc { font-size: 0.75rem; color: var(--muted); margin-top: 0.8rem; }
 
-/* ІДЕАЛЬНІ ТЕМНІ СПИСКИ ВИБОРУ */
-.stTextInput > div > div > input, .stSelectbox > div > div { background-color: var(--surface) !important; border: 1px solid var(--border) !important; color: var(--text) !important; border-radius: 12px !important; }
-.stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within { box-shadow: 0 0 0 1px #8348C1 !important; border-color: #8348C1 !important; }
+/* ФІКС БІЛИХ СПИСКІВ (ЯДЕРНИЙ ВАРІАНТ) */
+.stTextInput > div > div > input, .stSelectbox > div > div { 
+    background-color: var(--surface) !important; 
+    border: 1px solid var(--border) !important; 
+    color: var(--text) !important; 
+    border-radius: 12px !important; 
+}
 
-[data-baseweb="select"] > div { background-color: var(--surface) !important; border-color: var(--border) !important; color: var(--text) !important; }
-[data-baseweb="popover"] > div, div[data-testid="stVirtualDropdown"] { background-color: #050506 !important; border: 1px solid rgba(131,72,193,0.6) !important; border-radius: 12px !important; box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important; }
-ul[role="listbox"], div[role="listbox"] { background-color: #050506 !important; }
-li[role="option"], div[role="option"] { background-color: transparent !important; color: #FFFFFF !important; font-family: 'Montserrat', sans-serif !important; padding-top: 10px !important; padding-bottom: 10px !important; }
-li[role="option"]:hover, li[role="option"][aria-selected="true"], div[role="option"]:hover, div[role="option"][aria-selected="true"] { background-color: rgba(131,72,193,0.5) !important; color: #FFFFFF !important; }
+.stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within { 
+    box-shadow: 0 0 0 1px #8348C1 !important; 
+    border-color: #8348C1 !important; 
+}
+
+div[data-baseweb="select"] > div {
+    background-color: var(--surface) !important;
+    border-color: var(--border) !important;
+    color: var(--text) !important;
+}
+
+div[data-baseweb="popover"] > div,
+div[data-baseweb="popover"] ul,
+div[data-baseweb="popover"] li,
+div[data-testid="stVirtualDropdown"],
+div[data-testid="stVirtualDropdown"] ul,
+div[data-testid="stVirtualDropdown"] li,
+ul[role="listbox"],
+div[role="listbox"] {
+    background-color: #050506 !important;
+    color: #FFFFFF !important;
+}
+
+div[data-baseweb="popover"] > div, 
+div[data-testid="stVirtualDropdown"] {
+    border: 1px solid rgba(131,72,193,0.6) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important;
+    overflow: hidden !important;
+}
+
+div[data-baseweb="popover"] li,
+div[data-testid="stVirtualDropdown"] li {
+    font-family: 'Montserrat', sans-serif !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+}
+
+div[data-baseweb="popover"] li:hover,
+div[data-baseweb="popover"] li[aria-selected="true"],
+div[data-testid="stVirtualDropdown"] li:hover,
+div[data-testid="stVirtualDropdown"] li[aria-selected="true"] {
+    background-color: #8348C1 !important;
+    color: #FFFFFF !important;
+}
+
+/* ІНШІ СТИЛІ */
+div[data-testid="stExpander"], details[data-testid="stExpander"] { background-color: #050506 !important; border: 1px solid rgba(131,72,193,0.4) !important; border-radius: 12px !important; }
+div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summary p { font-family: 'Montserrat', sans-serif !important; color: #FFFFFF !important; font-weight: 600 !important; }
 
 .stButton > button { background: linear-gradient(90deg, #2C1969 0%, #8348C1 50%, #C38BFF 100%) !important; color: #FFFFFF !important; border: none !important; border-radius: 28px !important; font-weight: 500 !important; font-size: 14px !important; height: 44px !important; padding: 0 24px !important; transition-property: transform !important; transition-duration: 150ms !important; }
 .stButton > button:hover { transform: scale(1.05) !important; }
@@ -237,18 +353,6 @@ COIN_ALIASES = {
 }
 
 
-@st.cache_data(ttl=86400)
-def get_all_valid_tickers():
-    try:
-        r = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=5)
-        if r.status_code == 200:
-            symbols = r.json().get("symbols", [])
-            return set([s.get("baseAsset").upper() for s in symbols if s.get("quoteAsset") == "USDT"])
-    except Exception:
-        pass
-    return {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "SUI"}
-
-
 def extract_coin_from_question(text: str):
     if not text:
         return None
@@ -258,10 +362,17 @@ def extract_coin_from_question(text: str):
             alias_lower = alias.lower()
             if alias_lower in q:
                 return symbol
+
     valid_tickers = get_all_valid_tickers()
     cleaned = (
-        text.replace("?", " ").replace(",", " ").replace(".", " ").replace("!", " ")
-        .replace(":", " ").replace(";", " ").replace("/", " ").replace("\\", " ")
+        text.replace("?", " ")
+        .replace(",", " ")
+        .replace(".", " ")
+        .replace("!", " ")
+        .replace(":", " ")
+        .replace(";", " ")
+        .replace("/", " ")
+        .replace("\\", " ")
     )
     words = cleaned.split()
     bad_words = {
@@ -269,6 +380,7 @@ def extract_coin_from_question(text: str):
         "МОЖЕ", "БУТИ", "ДАЙ", "СКАЖИ", "ПІДКАЖИ", "ЦЕ", "НЕ",
         "НА", "ТА", "І", "В", "У", "ДЛЯ", "ПРО", "МЕНІ"
     }
+
     for word in words:
         clean = word.upper().strip()
         if 2 <= len(clean) <= 8 and clean.isalpha() and clean not in bad_words:
@@ -284,11 +396,7 @@ def get_realtime_binance_price(symbol: str):
     symbol = symbol.upper().strip()
     pair = f"{symbol}USDT"
     try:
-        r = requests.get(
-            "https://data-api.binance.vision/api/v3/ticker/24hr",
-            params={"symbol": pair},
-            timeout=7
-        )
+        r = requests.get("https://data-api.binance.vision/api/v3/ticker/24hr", params={"symbol": pair}, timeout=7)
         if r.status_code == 200:
             data = r.json()
             return {
@@ -299,7 +407,7 @@ def get_realtime_binance_price(symbol: str):
                 "high_24h": float(data.get("highPrice", 0)),
                 "low_24h": float(data.get("lowPrice", 0)),
                 "volume": float(data.get("quoteVolume", 0)),
-                "source": "Ринкові дані"
+                "source": "Binance"
             }
     except Exception:
         pass
@@ -312,17 +420,20 @@ def build_realtime_price_context(user_question: str):
         return ""
     data = get_realtime_binance_price(symbol)
     if not data:
-        return f"Користувач питає про монету {symbol}, але актуальну ціну зараз отримати не вдалося. Не вигадуй ціну."
+        return f"Користувач, можливо, питає про монету {symbol}, але актуальну ціну з Binance зараз отримати не вдалося.\nНе вигадуй точну ціну. Скажи, що зараз не можеш підтягнути актуальні дані по цій монеті."
 
     return f"""
 ВАЖЛИВО: користувач питає про монету {data['symbol']}.
-Ось АКТУАЛЬНІ {data['source']}:
+Ось АКТУАЛЬНІ ринкові дані з {data['source']}:
+- Пара: {data['pair']}
 - Поточна ціна: {fmt_price(data['price'])}
 - Зміна за 24г: {data['change_24h']:+.2f}%
 - Мінімум 24г: {fmt_price(data['low_24h'])}
 - Максимум 24г: {fmt_price(data['high_24h'])}
+- Обсяг 24г: {fmt_large(data['volume'])}
 
-Якщо користувач питає "яка ціна", відповідай саме цією ціною. Не вигадуй.
+Якщо користувач питає "яка ціна", відповідай саме цією ціною.
+Не вигадуй іншу ціну.
 """
 
 
@@ -336,6 +447,18 @@ def get_signal_style(signal: str):
     if "LONG" in signal: return "ml-signal-long", "#00E676"
     if "SHORT" in signal: return "ml-signal-short", "#FF3B30"
     return "ml-signal-neutral", "#fbbf24"
+
+
+@st.cache_data(ttl=86400)
+def get_all_valid_tickers():
+    try:
+        r = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=5)
+        if r.status_code == 200:
+            symbols = r.json().get("symbols", [])
+            return set([s.get("baseAsset").upper() for s in symbols if s.get("quoteAsset") == "USDT"])
+    except Exception:
+        pass
+    return {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "SUI"}
 
 
 @st.cache_data(ttl=86400)
@@ -401,7 +524,8 @@ def get_binance_tickers():
 
 @st.cache_data(ttl=3600)
 def search_coingecko_id(query: str):
-    if not query: return None, None
+    if not query:
+        return None, None
     try:
         r = requests.get(f"{COINGECKO_BASE}/search?query={query}", timeout=10)
         if r.status_code == 200:
@@ -421,7 +545,12 @@ def get_coin_data(coin_id: str):
     try:
         r = requests.get(
             f"{COINGECKO_BASE}/coins/{coin_id}",
-            params={"localization": "false", "tickers": "false", "community_data": "true", "developer_data": "false"},
+            params={
+                "localization": "false",
+                "tickers": "false",
+                "community_data": "true",
+                "developer_data": "false"
+            },
             timeout=10
         )
         return r.json() if r.status_code == 200 else None
@@ -434,7 +563,11 @@ def get_sparkline(coin_id: str):
     try:
         r = requests.get(
             f"{COINGECKO_BASE}/coins/{coin_id}/market_chart",
-            params={"vs_currency": "usd", "days": "7", "interval": "daily"},
+            params={
+                "vs_currency": "usd",
+                "days": "7",
+                "interval": "daily"
+            },
             timeout=10
         )
         if r.status_code == 200:
@@ -454,7 +587,13 @@ def translate_to_uk(text: str) -> str:
         return text
     try:
         url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": "auto", "tl": "uk", "dt": "t", "q": text}
+        params = {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": "uk",
+            "dt": "t",
+            "q": text
+        }
         r = requests.get(url, params=params, timeout=3)
         if r.status_code == 200:
             return "".join([s[0] for s in r.json()[0]])
@@ -465,25 +604,37 @@ def translate_to_uk(text: str) -> str:
 
 @st.cache_data(ttl=1800)
 def get_crypto_news(coin_name: str, symbol: str = ""):
-    if not NEWSAPI_KEY: return []
+    if not NEWSAPI_KEY:
+        return []
     query = f'"{coin_name}" OR ("{symbol}" AND crypto)'
     try:
         r = requests.get(
             "https://newsapi.org/v2/everything",
-            params={"q": query, "sortBy": "publishedAt", "language": "en", "pageSize": 3, "apiKey": NEWSAPI_KEY},
+            params={
+                "q": query,
+                "sortBy": "publishedAt",
+                "language": "en",
+                "pageSize": 3,
+                "apiKey": NEWSAPI_KEY
+            },
             timeout=10
         )
-        if r.status_code != 200: return []
+        if r.status_code != 200:
+            return []
         articles = r.json().get("articles", [])
         cleaned, seen = [], set()
         for a in articles:
             title = (a.get("title") or "").strip()
-            if not title or title in seen: continue
+            if not title or title in seen:
+                continue
             seen.add(title)
             ukr_title = translate_to_uk(title)
             cleaned.append({
                 "title": ukr_title,
                 "url": a.get("url", ""),
+                "source": {
+                    "name": a.get("source", {}).get("name", "Unknown")
+                },
                 "publishedAt": a.get("publishedAt", "")
             })
         return cleaned
@@ -493,37 +644,74 @@ def get_crypto_news(coin_name: str, symbol: str = ""):
 
 def stream_ollama(prompt: str):
     GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "").strip()
+
     if not GROQ_API_KEY:
-        yield "⚠️ Ключ GROQ_API_KEY не знайдено!"
+        yield "⚠️ Ключ GROQ_API_KEY не знайдено! Додай його у Secrets на Streamlit Cloud."
         return
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    data = {"model": MODEL_NAME, "messages": [{"role": "user", "content": prompt}], "temperature": 0.25, "stream": True}
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.25,
+        "stream": True
+    }
+
     try:
-        res = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data, stream=True,
-                            timeout=30)
+        res = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=data,
+            stream=True,
+            timeout=30
+        )
+
         if res.status_code != 200:
-            yield f"⚠️ Помилка AI: {res.text}"
+            yield f"⚠️ Помилка Groq API (Код {res.status_code}): {res.text}"
             return
+
         for line in res.iter_lines():
             if line:
                 decoded_line = line.decode("utf-8")
+
                 if decoded_line.startswith("data: "):
-                    if decoded_line == "data: [DONE]": break
+                    if decoded_line == "data: [DONE]":
+                        break
+
                     try:
                         chunk = json.loads(decoded_line[6:])
                         delta = chunk["choices"][0]["delta"].get("content", "")
-                        if delta: yield delta
+                        if delta:
+                            yield delta
                     except:
                         pass
+
     except Exception as e:
         yield f"⚠️ Технічна помилка: {e}"
 
 
-def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
-                          news):
-    news_text = "Актуальні новини по монеті:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]) if news else "Специфічних новин зараз немає."
-    return f"""Ти — Міша, фінансовий AI-асистент. Пиши чистою українською. Стиль: коротко, впевнено, живо, без води.
+def build_analysis_prompt(
+        name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news
+):
+    news_text = (
+        "Актуальні новини по монеті:\n" + "\n".join([f"- {n.get('title')}" for n in news])
+        if news else
+        "Специфічних новин зараз немає."
+    )
+
+    return f"""
+Ти — Міша, фінансовий AI-асистент. Пиши чистою українською.
+Стиль: коротко, впевнено, живо, без води.
+
 Проаналізуй {name} ({symbol}) на основі цих даних:
 - Ціна: {fmt_price(price)}
 - Зміна 24г: {change_24h:+.2f}%
@@ -536,34 +724,85 @@ def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, 
 
 {news_text}
 
-Напиши короткий живий огляд у 4-5 реченнях. Не давай фінансову пораду, але поясни ситуацію зрозуміло."""
+Напиши короткий живий огляд у 4-5 реченнях.
+Не давай фінансову пораду, але поясни ситуацію зрозуміло.
+"""
 
 
 def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news, history, user_q):
-    history_text = "\n".join(
-        [f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in
-         history[-6:]])
-    news_text = "Останні заголовки новин:\n" + "\n".join(
-        [f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
+    history_text = "\n".join([
+        f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}"
+        for m in history[-6:]
+    ])
+
+    news_text = (
+        "Останні заголовки новин:\n" + "\n".join([f"- {n.get('title')}" for n in news])
+        if news else
+        "Немає свіжих новин."
+    )
+
     realtime_context = build_realtime_price_context(user_q)
-    return f"""Ти — Міша, CryptoMisha AI.
-Твій стиль: українська мова; коротко, живо, по ділу; трохи зухвало, але без токсичності; не повторюй привітання.
-Не вигадуй ціни, відсотки, новини або прогнози.
-Ти можеш відповідати на будь-які питання (код, дизайн, крипта тощо).
-Контекст активної монети на екрані: {name} ({symbol})
+
+    return f"""
+Ти — Міша, CryptoMisha AI.
+
+Твій стиль:
+- українська мова;
+- коротко, живо, по ділу;
+- трохи зухвало, але без токсичності;
+- не повторюй постійно привітання;
+- не кажи "перевір сам", якщо в тебе вже є актуальні дані;
+- якщо не маєш точних даних — чесно скажи, що не можеш підтвердити;
+- не вигадуй ціни, відсотки, новини або прогнози.
+
+Ти можеш відповідати не тільки про крипту:
+- якщо питання звичайне — відповідай як розумний асистент;
+- якщо питання про код — пояснюй просто і покроково;
+- якщо питання про навчання — допомагай як репетитор;
+- якщо питання про дизайн — давай конкретні поради;
+- якщо питання про крипту — використовуй ринкові дані нижче.
+
+Контекст активної монети на екрані:
+{name} ({symbol})
 - Ціна: {fmt_price(price)}
 - Зміна 24г: {change_24h:+.2f}%
+- Зміна 7д: {change_7d:+.2f}%
+- Капіталізація: {fmt_large(cap)}
+- Обсяг: {fmt_large(vol)}
+
 {realtime_context}
-Новини: {news_text}
+
+Новини:
+{news_text}
+
 Історія чату:
 {history_text}
-Запит: {user_q}
-Відповідь Міші:"""
+
+Запит користувача:
+{user_q}
+
+Правила відповіді:
+1. Якщо користувач питає актуальну ціну монети — дай точну ціну з блоку "АКТУАЛЬНІ ринкові дані".
+2. Якщо монета з питання відрізняється від активної монети на екрані — все одно відповідай по монеті з питання.
+3. Якщо даних немає — не вигадуй.
+4. Якщо користувач пише "не правда", "ти помилився", "не така ціна" — не сперечайся, а спокійно поясни, що ціна могла змінитися або дані можуть відрізнятися між біржами.
+5. Відповідай природно, ніби ти реально розумний крипто-помічник.
+
+Відповідь Міші:
+"""
 
 
-for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []),
-                     ("cg_name", None), ("generate_new", False), ("selected_interval", "4h")]:
-    if key not in st.session_state: st.session_state[key] = default
+for key, default in [
+    ("messages", []),
+    ("current_coin", None),
+    ("coin_data", None),
+    ("coin_prices", []),
+    ("cg_name", None),
+    ("generate_new", False),
+    ("selected_interval", "4h")
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 def handle_chat_submit():
@@ -575,34 +814,51 @@ def handle_chat_submit():
 
 
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
+st.markdown(
+    f'<div class="hero-sub">// Binance + CoinGecko + NewsAPI + Groq AI</div>',
+    unsafe_allow_html=True
+)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 
 with col1:
     tickers_list = get_binance_tickers()
     raw_selection = st.selectbox(
-        "Пошук монети", options=tickers_list, index=None,
-        placeholder="🔍 Введи назву або тікер (наприклад: BTC, SOL, PEPE...)", label_visibility="collapsed"
+        "Пошук монети",
+        options=tickers_list,
+        index=None,
+        placeholder="🔍 Введи назву або тікер (наприклад: BTC, SOL, PEPE...)",
+        label_visibility="collapsed"
     )
     user_ticker = raw_selection.split(" ")[0] if raw_selection else ""
 
 with col2:
-    tf_label = st.selectbox("Таймфрейм", options=list(TIMEFRAME_OPTIONS.keys()), index=1, label_visibility="collapsed")
+    tf_label = st.selectbox(
+        "Таймфрейм",
+        options=list(TIMEFRAME_OPTIONS.keys()),
+        index=1,
+        label_visibility="collapsed"
+    )
     selected_interval = TIMEFRAME_OPTIONS[tf_label]
 
 with col3:
     analyze_btn = st.button("⚡ Аналізувати", use_container_width=True)
 
 if user_ticker and (
-        analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))):
+        analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))
+):
     if analyze_btn or st.session_state.current_coin != user_ticker:
-        with st.spinner(f"Шукаю {user_ticker}..."):
+        with st.spinner(f"Шукаю {user_ticker} на біржах..."):
             cg_id, cg_name = search_coingecko_id(user_ticker)
             if cg_id:
-                data, prices = get_coin_data(cg_id), get_sparkline(cg_id)
+                data = get_coin_data(cg_id)
+                prices = get_sparkline(cg_id)
             else:
-                data, prices = None, []
-                st.warning(f"⚠️ Графіки для '{user_ticker}' недоступні, але аналіз продовжується!")
+                data = None
+                prices = []
+                st.warning(
+                    f"⚠️ Не знайшов графіків для '{user_ticker}' на CoinGecko, але продовжую аналіз через Binance!"
+                )
 
             st.session_state.coin_data = data
             st.session_state.current_coin = user_ticker
@@ -618,7 +874,15 @@ if user_ticker and (
         prices = st.session_state.coin_prices
         cg_name = st.session_state.cg_name
 
-    price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info = 0, 0, 0, 0, 0, 0, 0, 0, ""
+    price = 0
+    change_24h = 0
+    change_7d = 0
+    cap = 0
+    vol = 0
+    ath = 0
+    low_24h = 0
+    high_24h = 0
+    spark_info = ""
     display_name = st.session_state.cg_name
 
     realtime_selected = get_realtime_binance_price(user_ticker)
@@ -673,7 +937,7 @@ if user_ticker and (
 
         st.markdown(f"""
         <div class="card">
-            <div class="card-title">{safe_text(display_name)} · Актуальні дані · {safe_text(user_ticker)}/USDT</div>
+            <div class="card-title">{safe_text(display_name)} · Binance · {safe_text(user_ticker)}/USDT</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
                 <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
@@ -684,7 +948,13 @@ if user_ticker and (
         </div>
         """, unsafe_allow_html=True)
 
-    tv_interval_map = {"1h": "60", "4h": "240", "1d": "D", "1w": "W", "1M": "M"}
+    tv_interval_map = {
+        "1h": "60",
+        "4h": "240",
+        "1d": "D",
+        "1w": "W",
+        "1M": "M"
+    }
 
     tv_html = f"""
     <div class="tradingview-widget-container" style="height:100%;width:100%; border-radius:16px; overflow:hidden; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 1.5rem; position: relative; box-shadow: 0 20px 70px rgba(131,72,193,0.10), 0 8px 25px rgba(0,0,0,0.35);">
@@ -710,9 +980,10 @@ if user_ticker and (
       </script>
     </div>
     """
+
     components.html(tv_html, height=420)
 
-    with st.spinner(f"🧠 ML-модель аналізує дані та розраховує прогноз ({tf_label})..."):
+    with st.spinner(f"🧠 ML-модель збирає дані та розраховує прогноз ({tf_label})..."):
         ml_result = get_ml_signal_cached(user_ticker, selected_interval)
         st.session_state.ml_result = ml_result
 
@@ -727,40 +998,18 @@ if user_ticker and (
 
         bb_text = (
             f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})"
-            if isinstance(bb_pct, (int, float)) else "—"
+            if isinstance(bb_pct, (int, float))
+            else "—"
         )
+
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
 
-        extra_metrics = (
-            f"&nbsp;·&nbsp; "
-            f"<span data-tooltip='Відсоток: скільки з передбачених сигналів реально справдились'>"
-            f"Precision: <b>{ml_result.get('precision', '—')}%</b></span> "
-            f"&nbsp;·&nbsp; "
-            f"<span data-tooltip='Відсоток: скільки реальних рухів ринку модель змогла зловити'>"
-            f"Recall: <b>{ml_result.get('recall', '—')}%</b></span> "
-            f"&nbsp;·&nbsp; "
-            f"<span data-tooltip='Збалансована оцінка між Precision та Recall'>"
-            f"F1: <b>{ml_result.get('f1_score', '—')}%</b></span>"
-        )
-
-        raw_prediction_html = (
-            f'<div class="ml-acc">Сирий прогноз: <b>{ml_result["raw_prediction"]}</b> '
-            f'&nbsp;·&nbsp; Режим: <b>{ml_result.get("mode", "—")}</b></div>'
-            if ml_result.get("signal") == "NO TRADE ⚪" and ml_result.get("raw_prediction")
-            else ""
-        )
-
-        sltp_html = (
-            f'<div class="ml-acc">'
-            f'<span data-tooltip="Stop Loss: Ціна, де угода закриється в мінус">SL: <b>{safe_price(ml_result["stop_loss"])}</b></span> '
-            f'&nbsp;·&nbsp; '
-            f'<span data-tooltip="Take Profit: Ціна, де угода закриється в плюс">TP: <b>{safe_price(ml_result["take_profit"])}</b></span> '
-            f'&nbsp;·&nbsp; '
-            f'<span data-tooltip="Співвідношення Ризик/Прибуток">R/R: <b>{ml_result.get("risk_reward", "—")}</b></span>'
-            f'</div>'
-            if ml_result.get("stop_loss") is not None and ml_result.get("take_profit") is not None
-            else ""
-        )
+        # Ідеально чистий рядок з SL і TP, без зайвих метрик
+        sl_val = ml_result.get("stop_loss")
+        tp_val = ml_result.get("take_profit")
+        sltp_html = ""
+        if sl_val is not None and tp_val is not None:
+            sltp_html = f"&nbsp;·&nbsp; <span data-tooltip='Stop Loss: Ціна, де угода закриється в мінус'>🛑 SL: <b style='color:var(--red)'>{safe_price(sl_val)}</b></span> &nbsp;·&nbsp; <span data-tooltip='Take Profit: Ціна, де угода закриється в плюс'>🎯 TP: <b style='color:var(--green)'>{safe_price(tp_val)}</b></span>"
 
         st.markdown(f"""
 <div class="ml-card" style="border-color: {signal_border};">
@@ -775,17 +1024,10 @@ if user_ticker and (
 <div class="ml-chip" data-tooltip="ATR (Середній істинний діапазон)"><span class="ml-chip-label">ATR</span><span>{safe_text(ml_result.get('atr_pct'))}%</span></div>
 <div class="ml-chip" data-tooltip="OBV (Балансовий обсяг)"><span class="ml-chip-label">OBV</span><span>{obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
 </div>
-<div class="ml-acc"><span data-tooltip="Відсоток правильних прогнозів моделі загалом">📊 Accuracy (CV): <b>{ml_result.get('accuracy', '—')}%</b></span> {extra_metrics} &nbsp;·&nbsp; ⚠️ Не є фінансовою порадою</div>
-{raw_prediction_html}{sltp_html}
+<div class="ml-acc"><span data-tooltip="Відсоток правильних прогнозів моделі">📊 Accuracy (CV): <b>{ml_result.get('accuracy', '—')}%</b></span>{sltp_html}</div>
 </div>
 """, unsafe_allow_html=True)
 
-        if ml_result.get("top_features"):
-            top_feats = ", ".join(
-                [f"{f['feature']} ({round(f['importance'] * 100, 1)}%)" for f in ml_result["top_features"][:5]])
-            st.markdown(
-                f'<div class="hint"><span data-tooltip="Дані та індикатори, які мали найбільший вплив на рішення">Найважливіші фічі моделі: {safe_text(top_feats)}</span></div>',
-                unsafe_allow_html=True)
     else:
         st.error(f"❌ ML прогноз недоступний: {ml_result.get('reason', 'невідома причина')}")
 
@@ -794,74 +1036,101 @@ if user_ticker and (
     with st.spinner("Шукаю свіжі інсайди..."):
         news_articles = get_crypto_news(display_name, user_ticker)
 
-    st.markdown('<div class="card-title" style="margin-top: 1.5rem;">📰 Останні новини</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="card-title" style="margin-top: 1.5rem;">📰 Останні новини</div>',
+        unsafe_allow_html=True
+    )
 
     if news_articles:
         for article in news_articles:
             st.markdown(f"""
             <div class="news-card">
                 <div class="news-title"><a href="{safe_url(article.get('url', '#'))}" target="_blank" rel="noopener noreferrer">{safe_text(article.get('title', 'Без заголовку'))}</a></div>
-                <div class="news-meta"><span>{safe_text((article.get('publishedAt') or '')[:10])}</span></div>
+                <div class="news-meta"><span>Джерело: {safe_text(article.get('source', {}).get('name', 'Unknown'))}</span><span>{safe_text((article.get('publishedAt') or '')[:10])}</span></div>
             </div>
             """, unsafe_allow_html=True)
     else:
-        st.markdown('<div class="hint">Новин по цій монеті зараз не знайдено.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="hint">Новин по цій монеті зараз не знайдено.</div>',
+            unsafe_allow_html=True
+        )
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
     analysis_key = f"analysis_{user_ticker}"
+
     if analyze_btn or analysis_key not in st.session_state:
-        prompt = build_analysis_prompt(display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h,
-                                       high_24h, spark_info, news_articles)
+        prompt = build_analysis_prompt(
+            display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
+            news_articles
+        )
+
         analysis_placeholder = st.empty()
         analysis_placeholder.markdown(
             f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div><span class="thinking">Міша аналізує графіки та новини... 🤔</span></div>',
-            unsafe_allow_html=True)
+            unsafe_allow_html=True
+        )
 
         full_analysis = ""
         for chunk in stream_ollama(prompt):
             full_analysis += chunk
             analysis_placeholder.markdown(
                 f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>{safe_text(full_analysis)}</div>',
-                unsafe_allow_html=True)
+                unsafe_allow_html=True
+            )
 
         st.session_state[analysis_key] = full_analysis
-        st.session_state.messages = [{"role": "ai", "content": full_analysis, "label": f"📊 Аналіз {display_name}"}]
+        st.session_state.messages = [{
+            "role": "ai",
+            "content": full_analysis,
+            "label": f"📊 Аналіз {display_name}"
+        }]
         st.rerun()
 
     for msg in st.session_state.messages:
         if msg["role"] == "ai":
             st.markdown(
                 f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · {safe_text(msg.get("label", "Відповідь"))}</div>{safe_text(msg["content"])}</div>',
-                unsafe_allow_html=True)
+                unsafe_allow_html=True
+            )
         else:
             st.markdown(
                 f'<div class="msg-user"><div class="msg-label msg-label-user">▸ Ти</div>{safe_text(msg["content"])}</div>',
-                unsafe_allow_html=True)
+                unsafe_allow_html=True
+            )
 
     if st.session_state.generate_new:
-        chat_prompt = build_chat_prompt(display_name, user_ticker, price, change_24h, cap, vol, change_7d,
-                                        news_articles, st.session_state.messages[:-1],
-                                        st.session_state.messages[-1]["content"])
+        chat_prompt = build_chat_prompt(
+            display_name, user_ticker, price, change_24h, cap, vol, change_7d, news_articles,
+            st.session_state.messages[:-1], st.session_state.messages[-1]["content"]
+        )
+
         chat_placeholder = st.empty()
         chat_placeholder.markdown(
             '<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div><span class="thinking">Міша думає... 🤔</span></div>',
-            unsafe_allow_html=True)
+            unsafe_allow_html=True
+        )
 
         full_answer = ""
         for chunk in stream_ollama(chat_prompt):
             full_answer += chunk
             chat_placeholder.markdown(
                 f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>{safe_text(full_answer)}</div>',
-                unsafe_allow_html=True)
+                unsafe_allow_html=True
+            )
 
         st.session_state.messages.append({"role": "ai", "content": full_answer, "label": "Відповідь"})
         st.session_state.generate_new = False
         st.rerun()
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
-    st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit,
-                  label_visibility="collapsed")
+    st.text_input(
+        "Питання",
+        placeholder="Напиши щось Міші...",
+        key="chat_input_widget",
+        on_change=handle_chat_submit,
+        label_visibility="collapsed"
+    )
     st.markdown('<div class="hint" style="cursor: default;">↵ Enter — надіслати повідомлення</div>',
                 unsafe_allow_html=True)
 

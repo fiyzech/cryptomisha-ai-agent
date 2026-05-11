@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import pickle
 import warnings
@@ -53,6 +52,14 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
+# Очисник значень для БД (захищає від крашів)
+def clean_float(val):
+    if val is None or pd.isna(val):
+        return None
+    return float(val)
+
+
+# --- ЗАПИС В model_predictions ---
 def log_prediction_to_db(data: dict):
     conn = None
     try:
@@ -63,16 +70,23 @@ def log_prediction_to_db(data: dict):
             (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
+
         values = (
-            data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''),
-            float(data.get('price', 0.0)), float(data.get('confidence', 0.0)), float(data.get('accuracy', 0.0)),
-            data.get('raw_prediction', ''), data.get('stop_loss'), data.get('take_profit')
+            str(data.get('symbol', '')),
+            str(data.get('interval', '')),
+            str(data.get('signal', '')),
+            clean_float(data.get('price')),
+            clean_float(data.get('confidence')),
+            clean_float(data.get('accuracy')),
+            str(data.get('raw_prediction', '')),
+            clean_float(data.get('stop_loss')),
+            clean_float(data.get('take_profit'))
         )
         cursor.execute(query, values)
         conn.commit()
         cursor.close()
     except Exception as e:
-        print(f"Помилка запису в БД: {e}")
+        print(f"Помилка запису журналу model_predictions: {e}")
     finally:
         if conn is not None: conn.close()
 
@@ -263,7 +277,7 @@ def build_feature_list(df: pd.DataFrame):
     return features
 
 
-# --- ЗБЕРЕЖЕННЯ І ЗАВАНТАЖЕННЯ МОДЕЛЕЙ З БД ---
+# --- ЗБЕРЕЖЕННЯ "МІЗКІВ" ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -276,7 +290,7 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
         cur.execute("""
             INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        """, (symbol, interval, psycopg2.Binary(model_bytes), float(accuracy), safe_features))
+        """, (symbol, interval, psycopg2.Binary(model_bytes), clean_float(accuracy), safe_features))
 
         conn.commit()
         cur.close()
@@ -306,7 +320,7 @@ def load_model_from_db(symbol, interval):
 
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     df = fetch_binance_data(f"{symbol}USDT", interval, limit=1500)
-    if df is None: return None, {}, []
+    if df is None or df.empty: return None, {}, []
 
     df = add_core_features(df)
     df = merge_multi_timeframe_features(df, symbol, interval)
@@ -357,7 +371,9 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
 # --- ГОЛОВНА ФУНКЦІЯ ПРОГНОЗУ ---
 def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.0, min_accuracy: float = 50.1) -> dict:
     binance_sym = resolve_binance_symbol(symbol)
-    mapping = {"1M": ("1w", 4, 0.3), "1w": ("1d", 5, 0.4), "1d": ("1h", 12, 0.5), "4h": ("15m", 8, 0.5),
+
+    # Визначаємо "робочий" таймфрейм для моделі
+    mapping = {"1M": ("1w", 4, 0.3), "1w": ("1d", 5, 0.4), "1d": ("1d", 3, 0.4), "4h": ("15m", 8, 0.5),
                "1h": ("5m", 6, 0.5)}
     act_tf, fut_bars, atr_m = mapping.get(interval, (interval, 3, 0.3))
 
@@ -373,10 +389,8 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         if not model: return {"status": "error", "reason": "Недостатньо даних для навчання"}
 
     df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
-
-    # ФІКС: Перевірка на помилку Binance API
-    if df_now is None or df_now.empty:
-        return {"status": "error", "reason": "Помилка завантаження поточних даних з Binance"}
+    if df_now is None or df_now.empty: return {"status": "error",
+                                               "reason": "Помилка завантаження поточних даних з Binance"}
 
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)

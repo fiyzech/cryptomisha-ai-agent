@@ -352,7 +352,7 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     df["target"] = np.where(df["future_return"] > thresh, 1, np.where(df["future_return"] < -thresh, 0, np.nan))
 
     df_c = df.dropna(subset=["target"]).copy()
-    if len(df_c) < 150: return None, {}, []
+    if len(df_c) < 40: return None, {}, []
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
     neg, pos = np.sum(y == 0), np.sum(y == 1)

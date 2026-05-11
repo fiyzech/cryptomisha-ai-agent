@@ -1,7 +1,7 @@
 import os
-import io
-import pickle
+import json
 import time
+import pickle
 import warnings
 import requests
 import psycopg2
@@ -53,50 +53,28 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-# --- ЗАПИС ПРОГНОЗІВ В ЖУРНАЛ (ГАРАНТОВАНИЙ) ---
 def log_prediction_to_db(data: dict):
+    conn = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Переконуємось, що таблиця є і вона правильна
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS model_predictions (
-                id SERIAL PRIMARY KEY,
-                symbol VARCHAR(20),
-                interval VARCHAR(10),
-                signal VARCHAR(50),
-                price REAL,
-                confidence REAL,
-                accuracy REAL,
-                raw_prediction VARCHAR(50),
-                stop_loss REAL,
-                take_profit REAL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-
-        cur.execute("""
+        cursor = conn.cursor()
+        query = """
             INSERT INTO model_predictions 
             (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            data.get('symbol', ''),
-            data.get('interval', ''),
-            data.get('signal', ''),
-            float(data.get('price', 0.0)),
-            float(data.get('confidence', 0.0)),
-            float(data.get('accuracy', 0.0)),
-            data.get('raw_prediction', ''),
-            float(data.get('stop_loss')) if data.get('stop_loss') else None,
-            float(data.get('take_profit')) if data.get('take_profit') else None
-        ))
-
+        """
+        values = (
+            data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''),
+            float(data.get('price', 0.0)), float(data.get('confidence', 0.0)), float(data.get('accuracy', 0.0)),
+            data.get('raw_prediction', ''), data.get('stop_loss'), data.get('take_profit')
+        )
+        cursor.execute(query, values)
         conn.commit()
-        cur.close()
-        conn.close()
+        cursor.close()
     except Exception as e:
-        print(f"Помилка запису в журнал model_predictions: {e}")
+        print(f"Помилка запису в БД: {e}")
+    finally:
+        if conn is not None: conn.close()
 
 
 # --- МАТЕМАТИКА ТА ФІЧІ ---
@@ -285,7 +263,7 @@ def build_feature_list(df: pd.DataFrame):
     return features
 
 
-# --- ЗБЕРЕЖЕННЯ "МІЗКІВ" ---
+# --- ЗБЕРЕЖЕННЯ І ЗАВАНТАЖЕННЯ МОДЕЛЕЙ З БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -394,7 +372,12 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         mode = "trained_fresh"
         if not model: return {"status": "error", "reason": "Недостатньо даних для навчання"}
 
-    df_now = fetch_binance_data(binance_sym, interval=act_tf, limit=200)
+    df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
+
+    # ФІКС: Перевірка на помилку Binance API
+    if df_now is None or df_now.empty:
+        return {"status": "error", "reason": "Помилка завантаження поточних даних з Binance"}
+
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)
 
@@ -440,7 +423,5 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "class_balance": {}, "top_features": metrics.get("top_features", []), "features_used": features,
     }
 
-    # Відправляємо словник на запис в Журнал
     log_prediction_to_db(result)
-
     return result

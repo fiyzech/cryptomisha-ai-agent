@@ -1,6 +1,7 @@
 import os
 import io
 import pickle
+import time
 import warnings
 import requests
 import psycopg2
@@ -18,7 +19,7 @@ warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД (Універсальне) ---
+# --- ПІДКЛЮЧЕННЯ ДО БД ---
 def get_db_connection():
     try:
         return psycopg2.connect(
@@ -52,7 +53,6 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-# --- ЗАПИС ЖУРНАЛУ В БД ---
 def log_prediction_to_db(data: dict):
     conn = None
     try:
@@ -72,13 +72,12 @@ def log_prediction_to_db(data: dict):
         conn.commit()
         cursor.close()
     except Exception as e:
-        print(f"Помилка запису в БД: {e}")
+        print(f"Помилка запису логів в БД: {e}")
     finally:
         if conn is not None:
             conn.close()
 
 
-# --- МАТЕМАТИКА ТА ІНДИКАТОРИ ---
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
@@ -149,7 +148,7 @@ def fetch_binance_data(symbol: str, interval: str, limit: int = 1500):
                 break
         except Exception:
             break
-        time.sleep(0.1)
+        time.sleep(0.1)  # ТЕПЕР TIME ПРАЦЮЄ!
 
     if not all_data: return None
 
@@ -267,7 +266,6 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
         conn = get_db_connection()
         cur = conn.cursor()
         model_bytes = pickle.dumps(model)
-        # Перетворюємо features на список звичайних стрічок (захист для PostgreSQL)
         safe_features = [str(f) for f in features]
         cur.execute("""
             INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
@@ -295,17 +293,16 @@ def load_model_from_db(symbol, interval):
         conn.close()
         if row:
             trained_at = row[3]
-            # Якщо моделі менше 7 днів — дістаємо
             if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=7):
                 return pickle.loads(row[0]), row[1], row[2]
-    except Exception as e:
-        print(f"Load DB Error: {e}")
+    except:
+        pass
     return None
 
 
 # --- ТРЕНУВАННЯ ---
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
-    df = fetch_binance_data(f"{symbol}USDT", interval, limit=1500)
+    df = fetch_binance_data(symbol, interval, limit=1500)
     if df is None: return None, {}, []
 
     df = add_core_features(df)
@@ -337,14 +334,9 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
         cv_f1.append(f1_score(y[val_idx], p, zero_division=0))
 
     final_model = XGBClassifier(**params).fit(X, y)
-    metrics = {
-        "accuracy": round(np.mean(cv_acc) * 100, 1),
-        "precision": round(np.mean(cv_pre) * 100, 1),
-        "recall": round(np.mean(cv_rec) * 100, 1),
-        "f1_score": round(np.mean(cv_f1) * 100, 1)
-    }
+    metrics = {"accuracy": round(np.mean(cv_acc) * 100, 1), "precision": round(np.mean(cv_pre) * 100, 1),
+               "recall": round(np.mean(cv_rec) * 100, 1), "f1_score": round(np.mean(cv_f1) * 100, 1)}
 
-    # Зберігаємо одразу після навчання
     save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
     return final_model, metrics, features
 
@@ -356,26 +348,21 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
                "1h": ("5m", 6, 0.5)}
     act_tf, fut_bars, atr_m = mapping.get(interval, (interval, 3, 0.3))
 
-    # Спроба завантажити з бази
     cached = load_model_from_db(binance_sym, act_tf)
     if cached:
         model, acc, features = cached
-        # Фоллбек метрик, якщо в базі збереглась тільки accuracy
         metrics = {"accuracy": acc, "precision": max(0, acc - 2), "recall": max(0, acc - 1),
                    "f1_score": max(0, acc - 1.5)}
         mode = "loaded_from_db"
     else:
-        # Якщо немає - вчимо
         model, metrics, features = train_intelligent_model(binance_sym, act_tf, fut_bars, atr_m)
         mode = "trained_fresh"
-        if not model: return {"status": "error", "reason": "Недостатньо даних для бектесту або балансу класів"}
+        if not model: return {"status": "error", "reason": "Недостатньо даних для навчання"}
 
-    # Підтягуємо свіжі дані
     df_now = fetch_binance_data(binance_sym, interval=act_tf, limit=200)
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)
 
-    # Заповнюємо відсутні колонки нулями
     for f in features:
         if f not in df_now.columns: df_now[f] = 0
 
@@ -395,7 +382,6 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     sl = price - dist_sl if final_signal == "LONG 🟢" else (price + dist_sl if final_signal == "SHORT 🔴" else None)
     tp = price + dist_tp if final_signal == "LONG 🟢" else (price - dist_tp if final_signal == "SHORT 🔴" else None)
 
-    # Цей словник 100% співпадає з очікуваннями твого crypto_ai.py
     result = {
         "status": "success", "symbol": symbol.upper(), "binance_symbol": f"{binance_sym}USDT", "interval": interval,
         "signal": final_signal, "raw_prediction": "LONG" if pred == 1 else "SHORT", "mode": mode,
@@ -419,10 +405,5 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "class_balance": {}, "top_features": [], "features_used": features,
     }
 
-    # Пишемо прогноз у таблицю model_predictions
     log_prediction_to_db(result)
     return result
-
-
-if __name__ == "__main__":
-    print(json.dumps(get_ml_signal("BTC", interval="1d"), indent=2, ensure_ascii=False))

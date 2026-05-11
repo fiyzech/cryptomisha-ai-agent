@@ -19,23 +19,31 @@ warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД ТА АВТО-СТВОРЕННЯ ТАБЛИЦЬ ---
+# --- ПІДКЛЮЧЕННЯ ТА СТВОРЕННЯ ТАБЛИЦЬ ---
 def get_db_connection():
     try:
-        return psycopg2.connect(dbname=st.secrets["POSTGRES_DB"], user=st.secrets["POSTGRES_USER"],
-                                password=st.secrets["POSTGRES_PASSWORD"], host=st.secrets["DB_HOST"],
-                                port=st.secrets["DB_PORT"])
-    except:
-        return psycopg2.connect(dbname=os.getenv("POSTGRES_DB"), user=os.getenv("POSTGRES_USER"),
-                                password=os.getenv("POSTGRES_PASSWORD"), host=os.getenv("DB_HOST"),
-                                port=os.getenv("DB_PORT"))
+        return psycopg2.connect(
+            dbname=st.secrets["POSTGRES_DB"],
+            user=st.secrets["POSTGRES_USER"],
+            password=st.secrets["POSTGRES_PASSWORD"],
+            host=st.secrets["DB_HOST"],
+            port=st.secrets["DB_PORT"]
+        )
+    except Exception:
+        return psycopg2.connect(
+            dbname=os.getenv("POSTGRES_DB", "CryptoPulse_db"),
+            user=os.getenv("POSTGRES_USER", "CryptoPulse_admin"),
+            password=os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password"),
+            host=os.getenv("DB_HOST", "localhost"),
+            port=os.getenv("DB_PORT", "5432")
+        )
 
 
 def ensure_tables_exist():
-    # Ця функція сама створить таблицю ml_models, якщо її немає, щоб не було помилок запису!
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # Створюємо таблицю для мізків, ЯКЩО ЇЇ НЕМАЄ
         cur.execute("""
             CREATE TABLE IF NOT EXISTS ml_models (
                 id SERIAL PRIMARY KEY,
@@ -52,7 +60,7 @@ def ensure_tables_exist():
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Помилка створення таблиці: {e}")
+        print(f"Помилка створення таблиці ml_models: {e}")
 
 
 BINANCE_SYMBOL_MAP = {"MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "SHIB", "PEPE": "PEPE", "SUI": "SUI",
@@ -60,35 +68,40 @@ BINANCE_SYMBOL_MAP = {"MATIC": "POL", "LUNA": "LUNC", "NEAR": "NEAR", "SHIB": "S
 
 
 def log_prediction_to_db(data: dict):
+    conn = None
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
+        cursor = conn.cursor()
         query = """INSERT INTO model_predictions (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-        cur.execute(query, (data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''),
-                            float(data.get('price', 0)), float(data.get('confidence', 0)),
-                            float(data.get('accuracy', 0)), data.get('raw_prediction', ''), data.get('stop_loss'),
-                            data.get('take_profit')))
+        values = (data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''), float(data.get('price', 0)),
+                  float(data.get('confidence', 0)), float(data.get('accuracy', 0)), data.get('raw_prediction', ''),
+                  data.get('stop_loss', None), data.get('take_profit', None))
+        cursor.execute(query, values)
         conn.commit()
-        cur.close()
-        conn.close()
+        cursor.close()
     except Exception as e:
-        print(f"DB Log Error: {e}")
+        print(f"Помилка логування: {e}")
+    finally:
+        if conn is not None: conn.close()
 
 
-# --- МАТЕМАТИКА ТА ФІЧІ ---
-def calculate_rsi(series: pd.Series, period=14):
+# --- МАТЕМАТИКА ---
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain, loss = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean(), (
         -delta.where(delta < 0, 0.0)).ewm(alpha=1 / period, adjust=False).mean()
     return 100 - (100 / (1 + gain / loss.replace(0, np.nan)))
 
 
-def calculate_macd(series: pd.Series, f=12, s=26, sig=9):
-    macd = series.ewm(span=f, adjust=False).mean() - series.ewm(span=s, adjust=False).mean()
-    return macd, macd.ewm(span=sig, adjust=False).mean(), macd - macd.ewm(span=sig, adjust=False).mean()
+def calculate_macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    exp1 = series.ewm(span=fast, adjust=False).mean()
+    exp2 = series.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd, signal_line, macd - signal_line
 
 
-def calculate_bollinger_bands(series: pd.Series, period=20, std=2):
+def calculate_bollinger_bands(series: pd.Series, period: int = 20, std: int = 2):
     sma, r_std = series.rolling(window=period).mean(), series.rolling(window=period).std()
     upper, lower = sma + (r_std * std), sma - (r_std * std)
     return upper, lower, (upper - lower) / sma.replace(0, np.nan), (series - lower) / (upper - lower).replace(0, np.nan)
@@ -99,34 +112,37 @@ def calculate_obv(close: pd.Series, volume: pd.Series):
                      index=close.index).cumsum()
 
 
-def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
     tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
 
 def calculate_stochastic(high, low, close, k_p=14, d_p=3):
-    ll, hh = low.rolling(k_p).min(), high.rolling(k_p).max()
+    ll, hh = low.rolling(window=k_p).min(), high.rolling(window=k_p).max()
     k = 100 * (close - ll) / (hh - ll).replace(0, np.nan)
-    return k, k.rolling(d_p).mean()
+    return k, k.rolling(window=d_p).mean()
 
 
-def fetch_binance_data(pair: str, interval: str, limit: int = 1500):
+def fetch_binance_data(symbol: str, interval: str, limit: int = 1500):
     url = "https://data-api.binance.vision/api/v3/klines"
+    headers = {"User-Agent": "Mozilla/5.0"}
     all_data, end_time, remaining = [], None, limit
     while remaining > 0:
-        params = {"symbol": pair.upper(), "interval": interval, "limit": min(remaining, 1000)}
+        current_limit = min(remaining, 1000)
+        params = {"symbol": symbol.upper(), "interval": interval, "limit": current_limit}
         if end_time: params["endTime"] = end_time
         try:
-            res = requests.get(url, params=params, timeout=5)
+            res = requests.get(url, params=params, headers=headers, timeout=5)
             if res.status_code == 200:
                 data = res.json()
-                if not data: break
+                if not data or not isinstance(data, list): break
                 all_data.extend(data)
                 end_time = data[0][0] - 1
                 remaining -= len(data)
+                if len(data) < current_limit: break
             else:
                 break
-        except:
+        except Exception:
             break
         time.sleep(0.1)
     if not all_data: return None
@@ -152,7 +168,8 @@ def add_core_features(df: pd.DataFrame):
     df["EMA_cross"] = df["EMA_20"] - df["EMA_50"]
     df["BB_upper"], df["BB_lower"], df["BB_bandwidth"], df["BB_percent"] = calculate_bollinger_bands(df["close"])
     df["OBV"] = calculate_obv(df["close"], df["vol"])
-    df["OBV_signal"] = df["OBV"] - df["OBV"].ewm(span=20).mean()
+    df["OBV_ema"] = df["OBV"].ewm(span=20).mean()
+    df["OBV_signal"] = df["OBV"] - df["OBV_ema"]
     df["ATR"] = calculate_atr(df["high"], df["low"], df["close"])
     df["ATR_pct"] = df["ATR"] / df["close"] * 100
     df["Stoch_K"], df["Stoch_D"] = calculate_stochastic(df["high"], df["low"], df["close"])
@@ -187,18 +204,24 @@ def merge_multi_timeframe_features(df: pd.DataFrame, pair: str, base_interval: s
 
 # --- ЗБЕРЕЖЕННЯ В БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
-    ensure_tables_exist()  # Перед записом гарантуємо, що таблиця є
+    ensure_tables_exist()  # СТВОРЮЄМО ТАБЛИЦЮ ПЕРЕД ЗАПИСОМ!
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP) ON CONFLICT (symbol, interval) DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP",
-            (symbol, interval, psycopg2.Binary(pickle.dumps(model)), float(accuracy), [str(f) for f in features]))
+        model_bytes = pickle.dumps(model)
+        safe_features = [str(f) for f in features]
+        cur.execute("""
+            INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (symbol, interval) 
+            DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, 
+                          features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP
+        """, (symbol, interval, psycopg2.Binary(model_bytes), float(accuracy), safe_features))
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Save Model Error: {e}")
+        print(f"Помилка збереження моделі: {e}")
 
 
 def load_model_from_db(symbol, interval):
@@ -211,17 +234,17 @@ def load_model_from_db(symbol, interval):
         row = cur.fetchone()
         cur.close()
         conn.close()
-        if row and (datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7)): return pickle.loads(row[0]), row[1], row[
-            2]
+        if row and (datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7)):
+            return pickle.loads(row[0]), row[1], row[2]
     except:
         pass
     return None
 
 
-# --- ТРЕНУВАННЯ ---
 def train_intelligent_model(symbol, pair, interval, fut_bars, atr_m):
     df = fetch_binance_data(pair, interval, limit=1500)
     if df is None: return None, {"reason": f"Монета {symbol} відсутня на Binance"}, []
+
     df = add_core_features(df)
     df = merge_multi_timeframe_features(df, pair, interval)
     features = [c for c in df.columns if
@@ -233,7 +256,7 @@ def train_intelligent_model(symbol, pair, interval, fut_bars, atr_m):
 
     df = df.ffill().fillna(0)
     df_c = df.dropna(subset=["target"]).copy()
-    if len(df_c) < 150: return None, {"reason": "Недостатньо даних"}, []
+    if len(df_c) < 150: return None, {"reason": "Недостатньо даних для навчання"}, []
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
     neg, pos = np.sum(y == 0), np.sum(y == 1)
@@ -252,9 +275,13 @@ def train_intelligent_model(symbol, pair, interval, fut_bars, atr_m):
         cv_f1.append(f1_score(y[val_idx], p, zero_division=0))
 
     final_model = XGBClassifier(**params).fit(X, y)
-    metrics = {"accuracy": round(np.mean(cv_acc) * 100, 1), "precision": round(np.mean(cv_pre) * 100, 1),
-               "recall": round(np.mean(cv_rec) * 100, 1), "f1_score": round(np.mean(cv_f1) * 100, 1)}
 
+    feature_importance = sorted(zip(features, final_model.feature_importances_), key=lambda x: x[1], reverse=True)
+    top_features = [{"feature": name, "importance": round(float(score), 6)} for name, score in feature_importance[:10]]
+
+    metrics = {"accuracy": round(np.mean(cv_acc) * 100, 1), "precision": round(np.mean(cv_pre) * 100, 1),
+               "recall": round(np.mean(cv_rec) * 100, 1), "f1_score": round(np.mean(cv_f1) * 100, 1),
+               "top_features": top_features}
     save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
     return final_model, metrics, features
 
@@ -271,7 +298,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     if cached:
         model, acc, features = cached
         metrics = {"accuracy": acc, "precision": max(0, acc - 2), "recall": max(0, acc - 1),
-                   "f1_score": max(0, acc - 1.5)}
+                   "f1_score": max(0, acc - 1.5), "top_features": []}
         mode = "loaded_from_db"
     else:
         model, metrics, features = train_intelligent_model(bin_sym, pair, act_tf, fut_bars, atr_m)
@@ -296,9 +323,10 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     last_raw = df_now.iloc[-1]
     price = float(last_raw["close"])
     atr = float(last_raw["ATR"]) if pd.notna(last_raw["ATR"]) else price * 0.02
+
+    # SL/TP
     dist_sl = min(atr * np.sqrt(fut_bars) * 1.0, price * 0.06)
     dist_tp = min(atr * np.sqrt(fut_bars) * 2.0, price * 0.12)
-
     sl = price - dist_sl if final_signal == "LONG 🟢" else (price + dist_sl if final_signal == "SHORT 🔴" else None)
     tp = price + dist_tp if final_signal == "LONG 🟢" else (price - dist_tp if final_signal == "SHORT 🔴" else None)
 
@@ -309,9 +337,20 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "recall": metrics.get("recall", 0), "f1_score": metrics.get("f1_score", 0),
         "price": round(price, 6), "rsi": round(float(last_raw["RSI"]), 1) if pd.notna(last_raw["RSI"]) else None,
         "ema20": round(float(last_raw["EMA_20"]), 4) if pd.notna(last_raw["EMA_20"]) else None,
+        "ema50": round(float(last_raw["EMA_50"]), 4) if pd.notna(last_raw["EMA_50"]) else None,
         "bb_percent": round(float(last_raw["BB_percent"]) * 100, 1) if pd.notna(last_raw["BB_percent"]) else None,
+        "stoch_k": round(float(last_raw["Stoch_K"]), 1) if pd.notna(last_raw["Stoch_K"]) else None,
+        "atr_pct": round(float(last_raw["ATR_pct"]), 2) if pd.notna(last_raw["ATR_pct"]) else None,
         "obv_trend": "↑" if float(last_raw["OBV_signal"]) > 0 else "↓",
-        "stop_loss": round(sl, 6) if sl else None, "take_profit": round(tp, 6) if tp else None
+        "trend_strength": round(float(last_raw["trend_strength"]) * 100, 3) if pd.notna(
+            last_raw["trend_strength"]) else None,
+        "price_vs_ema20": round(float(last_raw["price_vs_ema20"]) * 100, 3) if pd.notna(
+            last_raw["price_vs_ema20"]) else None,
+        "volume_spike": round(float(last_raw["volume_spike"]), 2) if pd.notna(last_raw["volume_spike"]) else None,
+        "fake_breakout": int(last_raw["fake_breakout"]) if pd.notna(last_raw["fake_breakout"]) else 0,
+        "target_threshold_pct": round(float(last_raw["ATR_pct"]) * atr_m, 3) if pd.notna(last_raw["ATR_pct"]) else None,
+        "stop_loss": round(sl, 6) if sl else None, "take_profit": round(tp, 6) if tp else None, "risk_reward": 2.0,
+        "class_balance": {}, "top_features": metrics.get("top_features", []), "features_used": features,
     }
     log_prediction_to_db(result)
     return result

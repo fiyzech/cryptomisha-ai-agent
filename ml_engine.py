@@ -7,9 +7,16 @@ import psycopg2
 import pytz
 import pandas as pd
 import numpy as np
-import streamlit as st
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
+# Якщо запускаємо на сайті - імпортуємо Streamlit. Якщо ботом на Render - ігноруємо.
+try:
+    import streamlit as st
+
+    HAS_STREAMLIT = True
+except ImportError:
+    HAS_STREAMLIT = False
 
 from xgboost import XGBClassifier
 from sklearn.model_selection import TimeSeriesSplit
@@ -21,22 +28,26 @@ load_dotenv()
 
 # --- ПІДКЛЮЧЕННЯ ДО БД ---
 def get_db_connection():
-    try:
-        return psycopg2.connect(
-            dbname=st.secrets["POSTGRES_DB"],
-            user=st.secrets["POSTGRES_USER"],
-            password=st.secrets["POSTGRES_PASSWORD"],
-            host=st.secrets["DB_HOST"],
-            port=st.secrets["DB_PORT"]
-        )
-    except Exception:
-        return psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB", "CryptoPulse_db"),
-            user=os.getenv("POSTGRES_USER", "CryptoPulse_admin"),
-            password=os.getenv("POSTGRES_PASSWORD", "CryptoPulse_password"),
-            host=os.getenv("DB_HOST", "localhost"),
-            port=os.getenv("DB_PORT", "5432")
-        )
+    if HAS_STREAMLIT:
+        try:
+            return psycopg2.connect(
+                dbname=st.secrets["POSTGRES_DB"],
+                user=st.secrets["POSTGRES_USER"],
+                password=st.secrets["POSTGRES_PASSWORD"],
+                host=st.secrets["DB_HOST"],
+                port=st.secrets["DB_PORT"]
+            )
+        except Exception:
+            pass
+
+    # Якщо це бот на Render, він бере змінні, які ти прописав у налаштуваннях
+    return psycopg2.connect(
+        dbname=os.getenv("POSTGRES_DB"),
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT", "5432")
+    )
 
 
 BINANCE_SYMBOL_MAP = {
@@ -53,7 +64,7 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-# --- ЗАПИС В ЖУРНАЛ (БРОНЕБІЙНИЙ ВІД NP.FLOAT64 + ЛЬВІВСЬКИЙ ЧАС) ---
+# --- ЗАПИС В ЖУРНАЛ ---
 def log_prediction_to_db(data: dict):
     conn = None
     try:
@@ -70,7 +81,6 @@ def log_prediction_to_db(data: dict):
                 return None
             return float(val)
 
-        # Беремо точний наш час і передаємо в БД
         kyiv_time = datetime.now(pytz.timezone('Europe/Kyiv')).strftime('%Y-%m-%d %H:%M:%S')
 
         values = (
@@ -377,7 +387,6 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     return final_model, metrics, features
 
 
-# --- ГОЛОВНА ФУНКЦІЯ ПРОГНОЗУ ---
 def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.0, min_accuracy: float = 50.1) -> dict:
     binance_sym = resolve_binance_symbol(symbol)
 

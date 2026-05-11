@@ -128,7 +128,6 @@ html, body, .stApp, p, div, span, li, a, button, input, select {
 .stTextInput > div > div > input, .stSelectbox > div > div { background-color: var(--surface) !important; border: 1px solid var(--border) !important; color: var(--text) !important; border-radius: 12px !important; }
 .stTextInput > div > div > input:focus, .stSelectbox > div > div:focus-within { box-shadow: 0 0 0 1px #8348C1 !important; border-color: #8348C1 !important; }
 
-/* ФІКС БІЛОГО ВИПАДАЮЧОГО СПИСКУ */
 [data-baseweb="popover"], [data-baseweb="popover"] > div, [data-testid="stVirtualDropdown"], [data-testid="stVirtualDropdown"] > div, [data-testid="stVirtualDropdown"] ul, ul[role="listbox"], div[role="listbox"] { background-color: #050506 !important; }
 [data-baseweb="popover"] > div, [data-testid="stVirtualDropdown"] { border: 1px solid rgba(131,72,193,0.6) !important; border-radius: 12px !important; box-shadow: 0 15px 40px rgba(0,0,0,0.9) !important; overflow: hidden !important; }
 li[role="option"], div[role="option"] { background-color: transparent !important; color: #FFFFFF !important; font-family: 'Montserrat', sans-serif !important; padding-top: 8px !important; padding-bottom: 8px !important; }
@@ -224,6 +223,7 @@ COIN_ALIASES = {
 
 @st.cache_data(ttl=86400)
 def get_all_valid_tickers():
+    """Стягує всі актуальні тікери з Binance для валідації."""
     try:
         r = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=5)
         if r.status_code == 200:
@@ -504,7 +504,8 @@ def stream_ollama(prompt: str):
         yield f"⚠️ Технічна помилка: {e}"
 
 
-def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news):
+def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info,
+                          news):
     news_text = "Актуальні новини:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Новин немає."
     return f"""Ти — Міша, фінансовий AI-асистент. Пиши чистою українською. Стиль: коротко, впевнено.
 Проаналізуй {name} ({symbol}):
@@ -547,7 +548,8 @@ def handle_chat_submit():
 
 
 st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
-st.markdown(f'<div class="hero-sub">// Оснащено моделлю {MODEL_NAME}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="hero-sub">// Оснащено моделлю {MODEL_NAME}</div>',
+            unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 
@@ -564,7 +566,8 @@ with col2:
 with col3:
     analyze_btn = st.button("⚡ Аналізувати", use_container_width=True)
 
-if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))):
+if user_ticker and (
+        analyze_btn or (st.session_state.current_coin == user_ticker and st.session_state.get("ml_result"))):
     if analyze_btn or st.session_state.current_coin != user_ticker:
         with st.spinner(f"Шукаю {user_ticker}..."):
             cg_id, cg_name = search_coingecko_id(user_ticker)
@@ -607,14 +610,15 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
 
         if realtime_selected:
             price, change_24h = realtime_selected.get("price", price), realtime_selected.get("change_24h", change_24h)
-            low_24h, high_24h, vol = realtime_selected.get("low_24h", low_24h), realtime_selected.get("high_24h", high_24h), realtime_selected.get("volume", vol)
+            low_24h, high_24h, vol = realtime_selected.get("low_24h", low_24h), realtime_selected.get("high_24h",
+                                                                                                      high_24h), realtime_selected.get(
+                "volume", vol)
 
         st.markdown(f"""
         <div class="card">
             <div class="card-title">{safe_text(display_name)} · #{safe_text(rank)} · {safe_text(user_ticker)}/USD</div>
             <div class="price-big">{fmt_price(price)}</div>
             <div class="stat-row">
-                <div class="stat-chip"><span class="chip-label">Зміна 1г</span><span class="{'change-pos' if change_1h >= 0 else 'change-neg'}">{change_1h:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">Зміна 24г</span><span class="{'change-pos' if change_24h >= 0 else 'change-neg'}">{change_24h:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">Зміна 7д</span><span class="{'change-pos' if change_7d >= 0 else 'change-neg'}">{change_7d:+.2f}%</span></div>
                 <div class="stat-chip"><span class="chip-label">MCap</span><span>{fmt_large(cap)}</span></div>
@@ -630,7 +634,9 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
 
     elif realtime_selected:
         price, change_24h = realtime_selected.get("price", 0), realtime_selected.get("change_24h", 0)
-        low_24h, high_24h, vol = realtime_selected.get("low_24h", 0), realtime_selected.get("high_24h", 0), realtime_selected.get("volume", 0)
+        low_24h, high_24h, vol = realtime_selected.get("low_24h", 0), realtime_selected.get("high_24h",
+                                                                                            0), realtime_selected.get(
+            "volume", 0)
         display_name = user_ticker
 
         st.markdown(f"""
@@ -668,7 +674,8 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
         rsi_val = ml_result.get("rsi")
         rsi_c = rsi_color(rsi_val) if isinstance(rsi_val, (int, float)) else "#e2e8f0"
         bb_pct = ml_result.get("bb_percent")
-        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(bb_pct, (int, float)) else "—"
+        bb_text = f"{bb_pct}% ({'перекуп.' if bb_pct > 80 else 'перепрод.' if bb_pct < 20 else 'норма'})" if isinstance(
+            bb_pct, (int, float)) else "—"
         obv_icon = "🟢" if ml_result.get("obv_trend") == "↑" else "🔴"
 
         st.markdown(f"""
@@ -681,8 +688,7 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
 <div class="ml-chip" data-tooltip="BB%: Положення ціни відносно смуг Боллінджера."><span>BB% {safe_text(bb_text)}</span></div>
 <div class="ml-chip" data-tooltip="OBV: Балансовий обсяг. Показує тиск покупців/продавців."><span>OBV {obv_icon} {safe_text(ml_result.get('obv_trend'))}</span></div>
 </div>
-<div class="ml-acc">📊 Accuracy: <b>{ml_result.get('accuracy', '—')}%</b> &nbsp;·&nbsp; Precision: <b>{ml_result.get('precision', '—')}%</b> &nbsp;·&nbsp; Recall: <b>{ml_result.get('recall', '—')}%</b> &nbsp;·&nbsp; F1: <b>{ml_result.get('f1_score', '—')}%</b></div>
-<div class="ml-acc" style="margin-top: 5px;">🛑 SL: <b style="color:var(--red)">{safe_price(ml_result.get('stop_loss', 0))}</b> &nbsp;·&nbsp; 🎯 TP: <b style="color:var(--green)">{safe_price(ml_result.get('take_profit', 0))}</b></div>
+<div class="ml-acc">📊 Accuracy: <b>{ml_result.get('accuracy', '—')}%</b></div>
 </div>
 """, unsafe_allow_html=True)
     else:
@@ -754,10 +760,10 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
     st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit,
                   label_visibility="collapsed")
 
-    with st.expander("📜 Журнал логів з БД"):
+    with st.expander("📜 Останні прогнози в базі даних"):
         try:
             conn = get_db_connection()
-            query = "SELECT symbol, interval, signal, price, confidence, accuracy, stop_loss, take_profit, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
+            query = "SELECT symbol, interval, signal, price, confidence, accuracy, created_at FROM model_predictions ORDER BY created_at DESC LIMIT 10"
             df_logs = pd.read_sql_query(query, conn)
             if not df_logs.empty:
                 df_logs['created_at'] = pd.to_datetime(df_logs['created_at']).dt.strftime('%Y-%m-%d %H:%M:%S')

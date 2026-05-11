@@ -1,7 +1,7 @@
 import os
-import json
-import time
+import io
 import pickle
+import time
 import warnings
 import requests
 import psycopg2
@@ -53,31 +53,53 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
+# --- ЗАПИС ПРОГНОЗІВ В ЖУРНАЛ (ГАРАНТОВАНИЙ) ---
 def log_prediction_to_db(data: dict):
-    conn = None
     try:
         conn = get_db_connection()
-        cursor = conn.cursor()
-        query = """
+        cur = conn.cursor()
+
+        # Переконуємось, що таблиця є і вона правильна
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS model_predictions (
+                id SERIAL PRIMARY KEY,
+                symbol VARCHAR(20),
+                interval VARCHAR(10),
+                signal VARCHAR(50),
+                price REAL,
+                confidence REAL,
+                accuracy REAL,
+                raw_prediction VARCHAR(50),
+                stop_loss REAL,
+                take_profit REAL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        cur.execute("""
             INSERT INTO model_predictions 
             (symbol, interval, signal, price, confidence, accuracy, raw_prediction, stop_loss, take_profit)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        values = (
-            data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''),
-            float(data.get('price', 0.0)), float(data.get('confidence', 0.0)), float(data.get('accuracy', 0.0)),
-            data.get('raw_prediction', ''), data.get('stop_loss'), data.get('take_profit')
-        )
-        cursor.execute(query, values)
+        """, (
+            data.get('symbol', ''),
+            data.get('interval', ''),
+            data.get('signal', ''),
+            float(data.get('price', 0.0)),
+            float(data.get('confidence', 0.0)),
+            float(data.get('accuracy', 0.0)),
+            data.get('raw_prediction', ''),
+            float(data.get('stop_loss')) if data.get('stop_loss') else None,
+            float(data.get('take_profit')) if data.get('take_profit') else None
+        ))
+
         conn.commit()
-        cursor.close()
+        cur.close()
+        conn.close()
     except Exception as e:
-        print(f"Помилка запису в БД: {e}")
-    finally:
-        if conn is not None: conn.close()
+        print(f"Помилка запису в журнал model_predictions: {e}")
 
 
-# --- МАТЕМАТИКА ТА ФІЧІ (ПОВНІСТЮ ТВОЇ) ---
+# --- МАТЕМАТИКА ТА ФІЧІ ---
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
@@ -171,7 +193,6 @@ def get_aux_intervals(base_interval: str):
 
 def add_core_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # Захист назв колонок
     if "h" in df.columns:
         df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
 
@@ -264,7 +285,7 @@ def build_feature_list(df: pd.DataFrame):
     return features
 
 
-# --- ЗБЕРЕЖЕННЯ І ЗАВАНТАЖЕННЯ МОДЕЛЕЙ З БД ---
+# --- ЗБЕРЕЖЕННЯ "МІЗКІВ" ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -371,9 +392,9 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     else:
         model, metrics, features = train_intelligent_model(binance_sym, act_tf, fut_bars, atr_m)
         mode = "trained_fresh"
-        if not model: return {"status": "error", "reason": "Недостатньо даних для бектесту"}
+        if not model: return {"status": "error", "reason": "Недостатньо даних для навчання"}
 
-    df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
+    df_now = fetch_binance_data(binance_sym, interval=act_tf, limit=200)
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)
 
@@ -419,5 +440,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "class_balance": {}, "top_features": metrics.get("top_features", []), "features_used": features,
     }
 
+    # Відправляємо словник на запис в Журнал
     log_prediction_to_db(result)
+
     return result

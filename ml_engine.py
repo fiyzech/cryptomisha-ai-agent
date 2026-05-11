@@ -1,7 +1,7 @@
 import os
-import io
-import pickle
+import json
 import time
+import pickle
 import warnings
 import requests
 import psycopg2
@@ -65,20 +65,19 @@ def log_prediction_to_db(data: dict):
         """
         values = (
             data.get('symbol', ''), data.get('interval', ''), data.get('signal', ''),
-            data.get('price', 0.0), data.get('confidence', 0.0), data.get('accuracy', 0.0),
-            data.get('raw_prediction', ''), data.get('stop_loss', None), data.get('take_profit', None)
+            float(data.get('price', 0.0)), float(data.get('confidence', 0.0)), float(data.get('accuracy', 0.0)),
+            data.get('raw_prediction', ''), data.get('stop_loss'), data.get('take_profit')
         )
         cursor.execute(query, values)
         conn.commit()
         cursor.close()
     except Exception as e:
-        print(f"Помилка запису журналу в БД: {e}")
+        print(f"Помилка запису в БД: {e}")
     finally:
-        if conn is not None:
-            conn.close()
+        if conn is not None: conn.close()
 
 
-# --- МАТЕМАТИКА ТА ФІЧІ (ПОВНІСТЮ ВІДНОВЛЕНО) ---
+# --- МАТЕМАТИКА ТА ФІЧІ (ПОВНІСТЮ ТВОЇ) ---
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
@@ -172,6 +171,7 @@ def get_aux_intervals(base_interval: str):
 
 def add_core_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    # Захист назв колонок
     if "h" in df.columns:
         df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "vol"})
 
@@ -264,7 +264,7 @@ def build_feature_list(df: pd.DataFrame):
     return features
 
 
-# --- ЗБЕРЕЖЕННЯ "МІЗКІВ" В БД ---
+# --- ЗБЕРЕЖЕННЯ І ЗАВАНТАЖЕННЯ МОДЕЛЕЙ З БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
@@ -272,7 +272,6 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
         model_bytes = pickle.dumps(model)
         safe_features = [str(f) for f in features]
 
-        # ЗАЛІЗОБЕТОННИЙ ЗАПИС (Видаляємо стару, пишемо нову - працює завжди)
         cur.execute("DELETE FROM ml_models WHERE symbol = %s AND interval = %s", (symbol, interval))
 
         cur.execute("""
@@ -284,7 +283,7 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
         cur.close()
         conn.close()
     except Exception as e:
-        print(f"Помилка збереження моделі в БД: {e}")
+        print(f"Помилка збереження моделі: {e}")
 
 
 def load_model_from_db(symbol, interval):
@@ -299,11 +298,10 @@ def load_model_from_db(symbol, interval):
         conn.close()
         if row:
             trained_at = row[3]
-            # Якщо моделі менше 7 днів — дістаємо
             if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=7):
                 return pickle.loads(row[0]), row[1], row[2]
-    except Exception as e:
-        print(f"Помилка завантаження моделі: {e}")
+    except:
+        pass
     return None
 
 
@@ -318,7 +316,6 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     df["future_return"] = df["close"].shift(-fut_bars) / df["close"] - 1
     thresh = (df["ATR_pct"] * atr_m) / 100.0
 
-    # Заповнюємо пропуски у фічах
     df[features] = df[features].ffill().fillna(0)
     df["target"] = np.where(df["future_return"] > thresh, 1, np.where(df["future_return"] < -thresh, 0, np.nan))
 
@@ -374,7 +371,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     else:
         model, metrics, features = train_intelligent_model(binance_sym, act_tf, fut_bars, atr_m)
         mode = "trained_fresh"
-        if not model: return {"status": "error", "reason": "Недостатньо даних для навчання"}
+        if not model: return {"status": "error", "reason": "Недостатньо даних для бектесту"}
 
     df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
     df_now = add_core_features(df_now)

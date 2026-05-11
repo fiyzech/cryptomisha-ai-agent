@@ -1,8 +1,6 @@
 import os
 import io
 import pickle
-import json
-import time
 import warnings
 import requests
 import psycopg2
@@ -20,7 +18,7 @@ warnings.filterwarnings("ignore")
 load_dotenv()
 
 
-# --- ПІДКЛЮЧЕННЯ ДО БД (Універсальне для хмари та локалки) ---
+# --- ПІДКЛЮЧЕННЯ ДО БД (Універсальне) ---
 def get_db_connection():
     try:
         return psycopg2.connect(
@@ -30,7 +28,7 @@ def get_db_connection():
             host=st.secrets["DB_HOST"],
             port=st.secrets["DB_PORT"]
         )
-    except:
+    except Exception:
         return psycopg2.connect(
             dbname=os.getenv("POSTGRES_DB", "CryptoPulse_db"),
             user=os.getenv("POSTGRES_USER", "CryptoPulse_admin"),
@@ -54,7 +52,7 @@ BINANCE_SYMBOL_MAP = {
 }
 
 
-# --- ЗАПИС ПРОГНОЗІВ ---
+# --- ЗАПИС ЖУРНАЛУ В БД ---
 def log_prediction_to_db(data: dict):
     conn = None
     try:
@@ -80,7 +78,7 @@ def log_prediction_to_db(data: dict):
             conn.close()
 
 
-# --- МАТЕМАТИКА ---
+# --- МАТЕМАТИКА ТА ІНДИКАТОРИ ---
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0).ewm(alpha=1 / period, adjust=False).mean()
@@ -126,7 +124,7 @@ def calculate_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, k_pe
     return k, d
 
 
-def fetch_binance_data(symbol: str = "BTCUSDT", interval: str = "4h", limit: int = 1500):
+def fetch_binance_data(symbol: str, interval: str, limit: int = 1500):
     url = "https://data-api.binance.vision/api/v3/klines"
     headers = {"User-Agent": "Mozilla/5.0"}
     all_data = []
@@ -252,29 +250,32 @@ def build_feature_list(df: pd.DataFrame):
         "RSI_lag2", "MACD_hist_lag1", "MACD_hist_lag2", "price_vs_ema20_lag1", "price_vs_ema20_lag2",
         "Stoch_cross_lag1", "Stoch_cross_lag2"
     ]
-    mtf_candidates = ["5m_RSI", "5m_MACD_hist", "5m_EMA_cross", "5m_trend_strength", "5m_price_vs_ema20", "5m_ATR_pct",
-                      "15m_RSI", "15m_MACD_hist", "15m_EMA_cross", "15m_trend_strength", "15m_price_vs_ema20",
-                      "15m_ATR_pct", "1h_RSI", "1h_MACD_hist", "1h_EMA_cross", "1h_trend_strength", "1h_price_vs_ema20",
-                      "1h_ATR_pct", "4h_RSI", "4h_MACD_hist", "4h_EMA_cross", "4h_trend_strength", "4h_price_vs_ema20",
-                      "4h_ATR_pct", "1d_RSI", "1d_MACD_hist", "1d_EMA_cross", "1d_trend_strength", "1d_price_vs_ema20",
-                      "1d_ATR_pct"]
+    mtf_candidates = [
+        "5m_RSI", "5m_MACD_hist", "5m_EMA_cross", "5m_trend_strength", "5m_price_vs_ema20", "5m_ATR_pct", "15m_RSI",
+        "15m_MACD_hist", "15m_EMA_cross", "15m_trend_strength", "15m_price_vs_ema20", "15m_ATR_pct", "1h_RSI",
+        "1h_MACD_hist", "1h_EMA_cross", "1h_trend_strength", "1h_price_vs_ema20", "1h_ATR_pct", "4h_RSI",
+        "4h_MACD_hist", "4h_EMA_cross", "4h_trend_strength", "4h_price_vs_ema20", "4h_ATR_pct", "1d_RSI",
+        "1d_MACD_hist", "1d_EMA_cross", "1d_trend_strength", "1d_price_vs_ema20", "1d_ATR_pct"
+    ]
     features += [col for col in mtf_candidates if col in df.columns]
     return features
 
 
-# --- РОБОТА З ml_models В БД ---
+# --- ЗБЕРЕЖЕННЯ "МІЗКІВ" В БД ---
 def save_model_to_db(symbol, interval, model, accuracy, features):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         model_bytes = pickle.dumps(model)
+        # Перетворюємо features на список звичайних стрічок (захист для PostgreSQL)
+        safe_features = [str(f) for f in features]
         cur.execute("""
             INSERT INTO ml_models (symbol, interval, model_binary, accuracy, features, trained_at)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (symbol, interval) 
             DO UPDATE SET model_binary = EXCLUDED.model_binary, accuracy = EXCLUDED.accuracy, 
                           features = EXCLUDED.features, trained_at = CURRENT_TIMESTAMP
-        """, (symbol, interval, psycopg2.Binary(model_bytes), float(accuracy), features))
+        """, (symbol, interval, psycopg2.Binary(model_bytes), float(accuracy), safe_features))
         conn.commit()
         cur.close()
         conn.close()
@@ -292,13 +293,17 @@ def load_model_from_db(symbol, interval):
         row = cur.fetchone()
         cur.close()
         conn.close()
-        if row and (datetime.now(row[3].tzinfo) - row[3] < timedelta(days=7)):
-            return pickle.loads(row[0]), row[1], row[2]
-    except:
-        pass
+        if row:
+            trained_at = row[3]
+            # Якщо моделі менше 7 днів — дістаємо
+            if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=7):
+                return pickle.loads(row[0]), row[1], row[2]
+    except Exception as e:
+        print(f"Load DB Error: {e}")
     return None
 
 
+# --- ТРЕНУВАННЯ ---
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     df = fetch_binance_data(f"{symbol}USDT", interval, limit=1500)
     if df is None: return None, {}, []
@@ -321,7 +326,7 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     tscv = TimeSeriesSplit(n_splits=3)
     cv_acc, cv_pre, cv_rec, cv_f1 = [], [], [], []
     params = {"n_estimators": 100, "max_depth": 4, "learning_rate": 0.05,
-              "scale_pos_weight": float(neg / pos if pos > 0 else 1), "verbosity": 0}
+              "scale_pos_weight": float(neg / pos if pos > 0 else 1.0), "verbosity": 0}
 
     for tr_idx, val_idx in tscv.split(X):
         tmp_m = XGBClassifier(**params).fit(X[tr_idx], y[tr_idx])
@@ -332,9 +337,14 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
         cv_f1.append(f1_score(y[val_idx], p, zero_division=0))
 
     final_model = XGBClassifier(**params).fit(X, y)
-    metrics = {"accuracy": round(np.mean(cv_acc) * 100, 1), "precision": round(np.mean(cv_pre) * 100, 1),
-               "recall": round(np.mean(cv_rec) * 100, 1), "f1_score": round(np.mean(cv_f1) * 100, 1)}
+    metrics = {
+        "accuracy": round(np.mean(cv_acc) * 100, 1),
+        "precision": round(np.mean(cv_pre) * 100, 1),
+        "recall": round(np.mean(cv_rec) * 100, 1),
+        "f1_score": round(np.mean(cv_f1) * 100, 1)
+    }
 
+    # Зберігаємо одразу після навчання
     save_model_to_db(symbol, interval, final_model, metrics["accuracy"], features)
     return final_model, metrics, features
 
@@ -346,21 +356,26 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
                "1h": ("5m", 6, 0.5)}
     act_tf, fut_bars, atr_m = mapping.get(interval, (interval, 3, 0.3))
 
-    cached = load_model_from_db(bin_sym, act_tf)
+    # Спроба завантажити з бази
+    cached = load_model_from_db(binance_sym, act_tf)
     if cached:
         model, acc, features = cached
+        # Фоллбек метрик, якщо в базі збереглась тільки accuracy
         metrics = {"accuracy": acc, "precision": max(0, acc - 2), "recall": max(0, acc - 1),
                    "f1_score": max(0, acc - 1.5)}
         mode = "loaded_from_db"
     else:
-        model, metrics, features = train_intelligent_model(bin_sym, act_tf, fut_bars, atr_m)
+        # Якщо немає - вчимо
+        model, metrics, features = train_intelligent_model(binance_sym, act_tf, fut_bars, atr_m)
         mode = "trained_fresh"
-        if not model: return {"status": "error", "reason": "Недостатньо даних для бектесту"}
+        if not model: return {"status": "error", "reason": "Недостатньо даних для бектесту або балансу класів"}
 
-    df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
+    # Підтягуємо свіжі дані
+    df_now = fetch_binance_data(binance_sym, interval=act_tf, limit=200)
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)
 
+    # Заповнюємо відсутні колонки нулями
     for f in features:
         if f not in df_now.columns: df_now[f] = 0
 
@@ -380,11 +395,12 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     sl = price - dist_sl if final_signal == "LONG 🟢" else (price + dist_sl if final_signal == "SHORT 🔴" else None)
     tp = price + dist_tp if final_signal == "LONG 🟢" else (price - dist_tp if final_signal == "SHORT 🔴" else None)
 
+    # Цей словник 100% співпадає з очікуваннями твого crypto_ai.py
     result = {
         "status": "success", "symbol": symbol.upper(), "binance_symbol": f"{binance_sym}USDT", "interval": interval,
         "signal": final_signal, "raw_prediction": "LONG" if pred == 1 else "SHORT", "mode": mode,
-        "confidence": prob, "accuracy": metrics["accuracy"], "precision": metrics["precision"],
-        "recall": metrics["recall"], "f1_score": metrics["f1_score"],
+        "confidence": prob, "accuracy": metrics["accuracy"], "precision": metrics.get("precision", 0),
+        "recall": metrics.get("recall", 0), "f1_score": metrics.get("f1_score", 0),
         "price": round(price, 6), "rsi": round(float(last_raw["RSI"]), 1) if pd.notna(last_raw["RSI"]) else None,
         "ema20": round(float(last_raw["EMA_20"]), 4) if pd.notna(last_raw["EMA_20"]) else None,
         "ema50": round(float(last_raw["EMA_50"]), 4) if pd.notna(last_raw["EMA_50"]) else None,
@@ -403,5 +419,10 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "class_balance": {}, "top_features": [], "features_used": features,
     }
 
+    # Пишемо прогноз у таблицю model_predictions
     log_prediction_to_db(result)
     return result
+
+
+if __name__ == "__main__":
+    print(json.dumps(get_ml_signal("BTC", interval="1d"), indent=2, ensure_ascii=False))

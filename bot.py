@@ -23,35 +23,67 @@ def run_dummy_server():
 
 # ===============================================================
 
-# ОСЬ ТУТ ПРОПИСАНІ ТВОЇ 4 ТАЙМФРЕЙМИ: 4 години, 1 день, 1 тиждень, 1 місяць
 INTERVALS = ["4h", "1d", "1w", "1M"]
 IGNORED_STABLECOINS = ['USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD', 'USDD', 'USDS']
 
 
 def get_top_125_coins():
-    print("🔄 Оновлюю список ТОП-125 монет (CoinGecko + Binance)...")
-    try:
-        b_res = requests.get("https://api.binance.com/api/v3/ticker/price", timeout=10)
-        if b_res.status_code != 200: raise Exception("Binance API Error")
-        valid_binance_pairs = {item['symbol'] for item in b_res.json() if item['symbol'].endswith('USDT')}
+    print("🔄 Оновлюю список ТОП-125 монет так само, як у MarketsPage...")
 
-        cg_res = requests.get(
-            "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1",
-            timeout=10)
-        if cg_res.status_code != 200: raise Exception("CoinGecko API Error")
+    try:
+        binance_res = requests.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            timeout=10
+        )
+
+        if binance_res.status_code != 200:
+            raise Exception(f"Binance API Error: {binance_res.status_code}")
+
+        coingecko_res = requests.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": 250,
+                "page": 1,
+                "sparkline": "false"
+            },
+            timeout=10
+        )
+
+        if coingecko_res.status_code != 200:
+            raise Exception(f"CoinGecko API Error: {coingecko_res.status_code}")
+
+        binance_data = binance_res.json()
+        cg_data = coingecko_res.json()
+
+        valid_binance_pairs = {
+            item["symbol"]
+            for item in binance_data
+            if item["symbol"].endswith("USDT")
+        }
 
         final_coins = []
-        for coin in cg_res.json():
-            symbol = coin['symbol'].upper()
-            if symbol in IGNORED_STABLECOINS: continue
+
+        for coin in cg_data:
+            symbol = coin["symbol"].upper()
+
+            if symbol in IGNORED_STABLECOINS:
+                continue
+
             if f"{symbol}USDT" in valid_binance_pairs:
                 final_coins.append(symbol)
-            if len(final_coins) == 125: break
+
+            if len(final_coins) == 125:
+                break
+
+        print(f"✅ Бот отримав ті самі монети, що й MarketsPage: {len(final_coins)}")
+
         return final_coins
+
     except Exception as e:
         print(f"❌ Помилка отримання списку монет: {e}")
         return ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "SUI", "PEPE", "AVAX"]
-
 
 def run_bot():
     print(f"\n🚀 [{time.strftime('%Y-%m-%d %H:%M:%S')}] Початок нового циклу аналізу...")

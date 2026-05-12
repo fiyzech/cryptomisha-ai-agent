@@ -25,6 +25,20 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 warnings.filterwarnings("ignore")
 load_dotenv()
 
+MODEL_MAX_AGE_DAYS = int(os.getenv("MODEL_MAX_AGE_DAYS", "7"))
+TRAIN_LIMIT = int(os.getenv("TRAIN_LIMIT", "1200"))
+PREDICT_LIMIT = int(os.getenv("PREDICT_LIMIT", "260"))
+DATA_CACHE_TTL_SECONDS = int(os.getenv("DATA_CACHE_TTL_SECONDS", "900"))
+XGB_ESTIMATORS = int(os.getenv("XGB_ESTIMATORS", "80"))
+XGB_MAX_DEPTH = int(os.getenv("XGB_MAX_DEPTH", "3"))
+XGB_LEARNING_RATE = float(os.getenv("XGB_LEARNING_RATE", "0.06"))
+XGB_SPLITS = int(os.getenv("XGB_SPLITS", "2"))
+PERFORMANCE_LOOKBACK = int(os.getenv("PERFORMANCE_LOOKBACK", "25"))
+MIN_PERFORMANCE_SAMPLES = int(os.getenv("MIN_PERFORMANCE_SAMPLES", "8"))
+MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.08"))
+MIN_VOLUME_SPIKE = float(os.getenv("MIN_VOLUME_SPIKE", "0.25"))
+DATA_CACHE = {}
+
 
 # --- ПІДКЛЮЧЕННЯ ДО БД ---
 def get_db_connection():
@@ -99,8 +113,10 @@ def log_prediction_to_db(data: dict):
         cursor.execute(query, values)
         conn.commit()
         cursor.close()
+        return True
     except Exception as e:
         print(f"Помилка запису журналу model_predictions: {e}")
+        return False
     finally:
         if conn is not None: conn.close()
 
@@ -152,6 +168,12 @@ def calculate_stochastic(high: pd.Series, low: pd.Series, close: pd.Series, k_pe
 
 
 def fetch_binance_data(symbol: str, interval: str, limit: int = 1500):
+    cache_key = (symbol.upper(), interval, int(limit))
+    cached = DATA_CACHE.get(cache_key)
+    now = time.time()
+    if cached and now - cached["saved_at"] <= DATA_CACHE_TTL_SECONDS:
+        return cached["df"].copy()
+
     url = "https://data-api.binance.vision/api/v3/klines"
     headers = {"User-Agent": "Mozilla/5.0"}
     all_data = []
@@ -184,7 +206,9 @@ def fetch_binance_data(symbol: str, interval: str, limit: int = 1500):
     df.columns = ["ts", "open", "high", "low", "close", "vol"]
     df[["open", "high", "low", "close", "vol"]] = df[["open", "high", "low", "close", "vol"]].astype(float)
     df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-    return df.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True).tail(limit)
+    df = df.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True).tail(limit)
+    DATA_CACHE[cache_key] = {"saved_at": now, "df": df.copy()}
+    return df
 
 
 def resolve_binance_symbol(symbol: str) -> str:
@@ -272,6 +296,25 @@ def merge_multi_timeframe_features(base_df: pd.DataFrame, symbol: str, base_inte
     return df
 
 
+def merge_market_context_features(base_df: pd.DataFrame, base_interval: str) -> pd.DataFrame:
+    df = base_df.copy().sort_values("ts")
+
+    for context_symbol, prefix in [("BTCUSDT", "btc"), ("ETHUSDT", "eth")]:
+        ctx_raw = fetch_binance_data(context_symbol, interval=base_interval, limit=min(TRAIN_LIMIT, 800))
+        if ctx_raw is None or len(ctx_raw) < 80:
+            continue
+
+        ctx = add_core_features(ctx_raw)
+        ctx["ret_3"] = ctx["close"].pct_change(3) * 100
+        ctx["ret_7"] = ctx["close"].pct_change(7) * 100
+        ctx["trend"] = (ctx["EMA_20"] - ctx["EMA_50"]) / ctx["close"]
+        keep_cols = ["ts", "RSI", "MACD_hist", "ret_3", "ret_7", "trend", "ATR_pct"]
+        ctx = ctx[keep_cols].rename(columns={c: f"{prefix}_{c}" for c in keep_cols if c != "ts"})
+        df = pd.merge_asof(df.sort_values("ts"), ctx.sort_values("ts"), on="ts", direction="backward")
+
+    return df
+
+
 def build_feature_list(df: pd.DataFrame):
     features = [
         "RSI", "RSI_slope", "MACD", "MACD_sig", "MACD_hist", "EMA_cross", "BB_bandwidth", "BB_percent", "OBV_signal",
@@ -288,6 +331,11 @@ def build_feature_list(df: pd.DataFrame):
         "1d_MACD_hist", "1d_EMA_cross", "1d_trend_strength", "1d_price_vs_ema20", "1d_ATR_pct"
     ]
     features += [col for col in mtf_candidates if col in df.columns]
+    context_candidates = [
+        "btc_RSI", "btc_MACD_hist", "btc_ret_3", "btc_ret_7", "btc_trend", "btc_ATR_pct",
+        "eth_RSI", "eth_MACD_hist", "eth_ret_3", "eth_ret_7", "eth_trend", "eth_ATR_pct"
+    ]
+    features += [col for col in context_candidates if col in df.columns]
     return features
 
 
@@ -330,19 +378,90 @@ def load_model_from_db(symbol, interval):
         conn.close()
         if row:
             trained_at = row[3]
-            if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=7):
+            if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=MODEL_MAX_AGE_DAYS):
                 return pickle.loads(row[0]), row[1], row[2]
     except:
         pass
     return None
 
 
+def get_recent_signal_performance(symbol: str, interval: str, current_price: float) -> dict:
+    conn = None
+    empty = {"count": 0, "winrate": None, "confidence_adjustment": 0.0, "accuracy_adjustment": 0.0}
+    horizon_hours = {"4h": 4, "1d": 24, "1w": 168, "1M": 720}.get(interval, 24)
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT signal, price
+            FROM model_predictions
+            WHERE UPPER(symbol) = %s
+              AND interval = %s
+              AND price IS NOT NULL
+              AND signal IS NOT NULL
+              AND signal NOT ILIKE 'NO TRADE%%'
+              AND created_at <= NOW() - (%s * INTERVAL '1 hour')
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (symbol.upper(), interval, horizon_hours, PERFORMANCE_LOOKBACK))
+        rows = cur.fetchall()
+        cur.close()
+
+        wins = 0
+        checked = 0
+        for signal, entry_price in rows:
+            if not entry_price or float(entry_price) <= 0:
+                continue
+
+            s = str(signal).upper()
+            entry = float(entry_price)
+            if "LONG" in s:
+                wins += int(current_price > entry)
+                checked += 1
+            elif "SHORT" in s:
+                wins += int(current_price < entry)
+                checked += 1
+
+        if checked < MIN_PERFORMANCE_SAMPLES:
+            return {"count": checked, "winrate": None, "confidence_adjustment": 0.0, "accuracy_adjustment": 0.0}
+
+        winrate = wins / checked * 100
+        confidence_adjustment = 0.0
+        accuracy_adjustment = 0.0
+
+        if winrate < 42:
+            confidence_adjustment = 8.0
+            accuracy_adjustment = 3.0
+        elif winrate < 48:
+            confidence_adjustment = 4.0
+            accuracy_adjustment = 1.5
+        elif winrate > 64:
+            confidence_adjustment = -3.0
+        elif winrate > 58:
+            confidence_adjustment = -1.5
+
+        return {
+            "count": checked,
+            "winrate": round(winrate, 1),
+            "confidence_adjustment": confidence_adjustment,
+            "accuracy_adjustment": accuracy_adjustment,
+        }
+    except Exception as e:
+        print(f"⚠️ Не вдалося оцінити історію сигналів {symbol} {interval}: {e}")
+        return empty
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def train_intelligent_model(symbol, interval, fut_bars, atr_m):
-    df = fetch_binance_data(f"{symbol}USDT", interval, limit=1500)
+    df = fetch_binance_data(f"{symbol}USDT", interval, limit=TRAIN_LIMIT)
     if df is None or df.empty: return None, {}, []
 
     df = add_core_features(df)
     df = merge_multi_timeframe_features(df, symbol, interval)
+    df = merge_market_context_features(df, interval)
     features = build_feature_list(df)
 
     df["future_return"] = df["close"].shift(-fut_bars) / df["close"] - 1
@@ -356,11 +475,26 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
     neg, pos = np.sum(y == 0), np.sum(y == 1)
+    if neg == 0 or pos == 0:
+        return None, {}, []
 
-    tscv = TimeSeriesSplit(n_splits=3)
+    tscv = TimeSeriesSplit(n_splits=max(2, XGB_SPLITS))
     cv_acc, cv_pre, cv_rec, cv_f1 = [], [], [], []
-    params = {"n_estimators": 100, "max_depth": 4, "learning_rate": 0.05,
-              "scale_pos_weight": float(neg / pos if pos > 0 else 1.0), "verbosity": 0}
+    params = {
+        "n_estimators": XGB_ESTIMATORS,
+        "max_depth": XGB_MAX_DEPTH,
+        "learning_rate": XGB_LEARNING_RATE,
+        "subsample": 0.85,
+        "colsample_bytree": 0.85,
+        "min_child_weight": 2,
+        "gamma": 0.05,
+        "reg_lambda": 1.2,
+        "scale_pos_weight": float(neg / pos if pos > 0 else 1.0),
+        "eval_metric": "logloss",
+        "tree_method": "hist",
+        "n_jobs": 1,
+        "verbosity": 0,
+    }
 
     for tr_idx, val_idx in tscv.split(X):
         tmp_m = XGBClassifier(**params).fit(X[tr_idx], y[tr_idx])
@@ -380,6 +514,8 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
         "precision": round(np.mean(cv_pre) * 100, 1),
         "recall": round(np.mean(cv_rec) * 100, 1),
         "f1_score": round(np.mean(cv_f1) * 100, 1),
+        "train_samples": int(len(df_c)),
+        "positive_rate": round(float(pos / max(pos + neg, 1)) * 100, 1),
         "top_features": top_features
     }
 
@@ -405,12 +541,13 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         mode = "trained_fresh"
         if not model: return {"status": "error", "reason": "Недостатньо даних для навчання"}
 
-    df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=200)
+    df_now = fetch_binance_data(f"{binance_sym}USDT", interval=act_tf, limit=PREDICT_LIMIT)
     if df_now is None or df_now.empty: return {"status": "error",
                                                "reason": "Помилка завантаження поточних даних з Binance"}
 
     df_now = add_core_features(df_now)
     df_now = merge_multi_timeframe_features(df_now, binance_sym, act_tf)
+    df_now = merge_market_context_features(df_now, act_tf)
 
     for f in features:
         if f not in df_now.columns: df_now[f] = 0
@@ -419,11 +556,34 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     pred = int(model.predict(X_pred)[0])
     prob = round(float(model.predict_proba(X_pred)[0][pred]) * 100, 1)
 
-    final_signal = "NO TRADE ⚪" if prob < min_confidence or metrics["accuracy"] < min_accuracy else (
-        "LONG 🟢" if pred == 1 else "SHORT 🔴")
-
     last_raw = df_now.iloc[-1]
     price = float(last_raw["close"])
+    feedback = get_recent_signal_performance(symbol.upper(), interval, price)
+    adaptive_min_confidence = max(50.0, min(75.0, min_confidence + feedback["confidence_adjustment"]))
+    adaptive_min_accuracy = max(48.0, min(70.0, min_accuracy + feedback["accuracy_adjustment"]))
+    no_trade_reasons = []
+
+    if prob < adaptive_min_confidence:
+        no_trade_reasons.append(f"confidence<{adaptive_min_confidence:.1f}")
+    if float(metrics["accuracy"]) < adaptive_min_accuracy:
+        no_trade_reasons.append(f"accuracy<{adaptive_min_accuracy:.1f}")
+
+    atr_pct = float(last_raw["ATR_pct"]) if pd.notna(last_raw["ATR_pct"]) else None
+    volume_spike = float(last_raw["volume_spike"]) if pd.notna(last_raw["volume_spike"]) else None
+    btc_ret_3 = float(last_raw["btc_ret_3"]) if "btc_ret_3" in last_raw and pd.notna(last_raw["btc_ret_3"]) else None
+    raw_direction = "LONG" if pred == 1 else "SHORT"
+
+    if atr_pct is not None and atr_pct < MIN_ATR_PCT and prob < adaptive_min_confidence + 8:
+        no_trade_reasons.append("flat_market")
+    if volume_spike is not None and volume_spike < MIN_VOLUME_SPIKE and prob < adaptive_min_confidence + 5:
+        no_trade_reasons.append("weak_volume")
+    if btc_ret_3 is not None:
+        if raw_direction == "LONG" and btc_ret_3 < -1.2 and prob < adaptive_min_confidence + 7:
+            no_trade_reasons.append("btc_context_bearish")
+        if raw_direction == "SHORT" and btc_ret_3 > 1.2 and prob < adaptive_min_confidence + 7:
+            no_trade_reasons.append("btc_context_bullish")
+
+    final_signal = "NO TRADE ⚪" if no_trade_reasons else ("LONG 🟢" if pred == 1 else "SHORT 🔴")
     atr = float(last_raw["ATR"]) if pd.notna(last_raw["ATR"]) else price * 0.02
     dist_sl, dist_tp = min(atr * np.sqrt(fut_bars) * 1.0, price * 0.06), min(atr * np.sqrt(fut_bars) * 2.0,
                                                                              price * 0.12)
@@ -451,8 +611,14 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         "fake_breakout": int(last_raw["fake_breakout"]) if pd.notna(last_raw["fake_breakout"]) else 0,
         "target_threshold_pct": round(float(last_raw["ATR_pct"]) * atr_m, 3) if pd.notna(last_raw["ATR_pct"]) else None,
         "stop_loss": round(sl, 6) if sl else None, "take_profit": round(tp, 6) if tp else None, "risk_reward": 2.0,
+        "adaptive_min_confidence": round(adaptive_min_confidence, 1),
+        "adaptive_min_accuracy": round(adaptive_min_accuracy, 1),
+        "feedback_count": feedback["count"],
+        "feedback_winrate": feedback["winrate"],
+        "no_trade_reasons": no_trade_reasons,
+        "btc_ret_3": round(btc_ret_3, 3) if btc_ret_3 is not None else None,
         "class_balance": {}, "top_features": metrics.get("top_features", []), "features_used": features,
     }
 
-    log_prediction_to_db(result)
+    result["db_logged"] = log_prediction_to_db(result)
     return result

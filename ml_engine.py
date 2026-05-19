@@ -7,7 +7,7 @@ import psycopg2
 import pytz
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 # Якщо запускаємо на сайті - імпортуємо Streamlit. Якщо ботом на Render - ігноруємо.
@@ -114,7 +114,7 @@ def log_prediction_to_db(data: dict):
                 return None
             return float(val)
 
-        kyiv_time = datetime.now(pytz.timezone('Europe/Kyiv')).strftime('%Y-%m-%d %H:%M:%S')
+        created_at = datetime.now(timezone.utc)
 
         values = (
             str(data.get('symbol', '')),
@@ -126,7 +126,7 @@ def log_prediction_to_db(data: dict):
             str(data.get('raw_prediction', '')),
             safe_float(data.get('stop_loss')),
             safe_float(data.get('take_profit')),
-            kyiv_time
+            created_at
         )
 
         cursor.execute(query, values)

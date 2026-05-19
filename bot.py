@@ -5,14 +5,102 @@ import os
 import json
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
 from ml_engine import get_ml_signal, get_db_connection, purge_data_cache
 
+_PREDICT_LOCK = threading.Lock()
+_PREDICTING_NOW: set = set()
+
+
+def _run_single_prediction(symbol: str):
+    """Запускається в окремому треді: генерує прогноз для символу по всіх 4 таймфреймах."""
+    sym = symbol.upper().strip()
+    print(f"🔔 On-demand прогноз: {sym} (всі 4 TF)...")
+    for interval in ["4h", "1d", "1w", "1M"]:
+        try:
+            result = get_ml_signal(sym, interval)
+            status = result.get("status")
+            if status == "success" and result.get("db_logged"):
+                print(f"  ✅ {sym}/{interval}: {result.get('signal')}")
+            else:
+                print(f"  ⚠️ {sym}/{interval}: {result.get('reason', status)}")
+        except Exception as e:
+            print(f"  ❌ {sym}/{interval}: {e}")
+        time.sleep(1.5)  # пауза між запитами до Binance
+
+    with _PREDICT_LOCK:
+        _PREDICTING_NOW.discard(sym)
+    print(f"✔️ On-demand завершено для {sym}")
+
+
 class DummyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
+
+    # ── CORS helper ──────────────────────────────────────────────
+    def _send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def do_OPTIONS(self):
+        """CORS preflight."""
+        self.send_response(204)
+        self._send_cors_headers()
         self.end_headers()
-        self.wfile.write("CryptoMisha Bot is running and analyzing markets! 🚀".encode('utf-8'))
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path   = parsed.path.rstrip("/")
+        params = parse_qs(parsed.query)
+
+        # ── /predict?symbol=XRP ──────────────────────────────────
+        if path == "/predict":
+            symbol = (params.get("symbol", [""])[0] or "").upper().strip()
+            if not symbol:
+                self.send_response(400)
+                self._send_cors_headers()
+                self.send_header("Content-type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "symbol required"}).encode())
+                return
+
+            with _PREDICT_LOCK:
+                already = symbol in _PREDICTING_NOW
+                if not already:
+                    _PREDICTING_NOW.add(symbol)
+
+            if already:
+                self.send_response(202)
+                self._send_cors_headers()
+                self.send_header("Content-type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "already_running", "symbol": symbol}).encode())
+                return
+
+            # Запускаємо в окремому треді щоб не блокувати HTTP-сервер
+            threading.Thread(
+                target=_run_single_prediction,
+                args=(symbol,),
+                daemon=True
+            ).start()
+
+            self.send_response(202)
+            self._send_cors_headers()
+            self.send_header("Content-type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "started", "symbol": symbol}).encode())
+            return
+
+        # ── / (status page) ─────────────────────────────────────
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(
+            f"CryptoMisha Bot is running! Last cycle: {BOT_LAST_CYCLE}".encode("utf-8")
+        )
+
+    def log_message(self, *args):
+        pass  # мовчимо в логах, щоб не засмічувати
 
 
 def run_dummy_server():
@@ -24,9 +112,10 @@ def run_dummy_server():
 # ===============================================================
 
 INTERVALS = ["4h", "1d", "1w", "1M"]
+BOT_LAST_CYCLE = "не запускався"  # для статус-ендпоінту
 IGNORED_STABLECOINS = ['USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD', 'USDD', 'USDS']
 MARKETS_LIMIT = int(os.environ.get("MARKETS_LIMIT", "125"))
-PREDICTION_FRESH_HOURS = float(os.environ.get("PREDICTION_FRESH_HOURS", "6"))
+PREDICTION_FRESH_HOURS = float(os.environ.get("PREDICTION_FRESH_HOURS", "4"))  # оновлюємо кожні 4г
 JOB_SLEEP_SECONDS = float(os.environ.get("JOB_SLEEP_SECONDS", "2.5"))
 COIN_CACHE_FILE = os.environ.get("COIN_CACHE_FILE", "coin_universe_cache.json")
 DEFAULT_FALLBACK_COINS = [
@@ -280,29 +369,51 @@ def run_bot():
     )
 
 
+def self_ping_loop():
+    """
+    Пінгує власний веб-сервер кожні 10 хвилин щоб Render Free не усипляв процес.
+    Render усипляє web service після 15 хв без трафіку — цей цикл запобігає цьому.
+    """
+    port = int(os.environ.get("PORT", 10000))
+    url  = f"http://localhost:{port}/"
+    while True:
+        try:
+            requests.get(url, timeout=5)
+        except Exception:
+            pass
+        time.sleep(600)
+
+
 if __name__ == "__main__":
-    # 1. Запускаємо веб-сервер у фоні для Render
+    global BOT_LAST_CYCLE
+
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("🌐 Мікро-сервер для Render запущено!")
 
-    # 2. Запускаємо безкінечний цикл бота з захистом від вильотів
+    threading.Thread(target=self_ping_loop, daemon=True).start()
+    print("📡 Self-ping запущено (кожні 10 хв, захист від сну Render)")
+
     print("🤖 Автономний AI-бот CryptoMisha успішно запущений!")
     cycle = 0
     while True:
         cycle += 1
+        BOT_LAST_CYCLE = f"Цикл {cycle} — {time.strftime('%Y-%m-%d %H:%M:%S')}"
         try:
             run_bot()
         except Exception as exc:
-            # Будь-яка непередбачена помилка НЕ зупиняє бота — логуємо і продовжуємо
             print(f"💥 [Цикл {cycle}] Критична помилка run_bot(): {exc}. Перезапуск через 5 хвилин...")
             time.sleep(300)
             continue
 
-        # Після успішного циклу: чистимо кеш даних і спимо 2 год
         try:
             purge_data_cache()
         except Exception as e:
             print(f"⚠️ purge_data_cache() failed: {e}")
 
-        print(f"💤 [Цикл {cycle}] Наступний цикл через 2 год...")
-        time.sleep(7200)
+        sleep_total = 7200  # 2 год
+        sleep_chunk = 60    # прокидаємось кожну хвилину
+        elapsed = 0
+        print(f"💤 [Цикл {cycle}] Наступний цикл через {sleep_total//3600} год...")
+        while elapsed < sleep_total:
+            time.sleep(sleep_chunk)
+            elapsed += sleep_chunk

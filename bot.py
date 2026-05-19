@@ -3,10 +3,16 @@ import requests
 import threading
 import os
 import json
+import sys
+from builtins import print as builtins_print
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from ml_engine import get_ml_signal, get_db_connection, purge_data_cache
+
+# Форс-flush для Render: print одразу пишеться в логи без буферизації
+import functools
+print = functools.partial(builtins_print, flush=True)
 
 _PREDICT_LOCK = threading.Lock()
 _PREDICTING_NOW: set = set()
@@ -388,10 +394,14 @@ if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("🌐 Мікро-сервер для Render запущено!")
 
+    # Маленька пауза — даємо HTTP-серверу час підняти сокет до першого self-ping
+    time.sleep(2)
+
     threading.Thread(target=self_ping_loop, daemon=True).start()
     print("📡 Self-ping запущено (кожні 10 хв, захист від сну Render)")
 
     print("🤖 Автономний AI-бот CryptoMisha успішно запущений!")
+    sys.stdout.flush()
     cycle = 0
     while True:
         cycle += 1

@@ -32,12 +32,31 @@ DATA_CACHE_TTL_SECONDS = int(os.getenv("DATA_CACHE_TTL_SECONDS", "900"))
 XGB_ESTIMATORS = int(os.getenv("XGB_ESTIMATORS", "80"))
 XGB_MAX_DEPTH = int(os.getenv("XGB_MAX_DEPTH", "3"))
 XGB_LEARNING_RATE = float(os.getenv("XGB_LEARNING_RATE", "0.06"))
-XGB_SPLITS = int(os.getenv("XGB_SPLITS", "2"))
+XGB_SPLITS = int(os.getenv("XGB_SPLITS", "5"))
 PERFORMANCE_LOOKBACK = int(os.getenv("PERFORMANCE_LOOKBACK", "25"))
 MIN_PERFORMANCE_SAMPLES = int(os.getenv("MIN_PERFORMANCE_SAMPLES", "8"))
 MIN_ATR_PCT = float(os.getenv("MIN_ATR_PCT", "0.08"))
 MIN_VOLUME_SPIKE = float(os.getenv("MIN_VOLUME_SPIKE", "0.25"))
 DATA_CACHE = {}
+DATA_CACHE_MAX_ENTRIES = int(os.getenv("DATA_CACHE_MAX_ENTRIES", "200"))
+
+
+def purge_data_cache():
+    """Прибирає застарілі та зайві записи з DATA_CACHE, щоб уникнути росту пам'яті."""
+    now = time.time()
+    expired_keys = [k for k, v in DATA_CACHE.items() if now - v.get("saved_at", 0) > DATA_CACHE_TTL_SECONDS]
+    for k in expired_keys:
+        DATA_CACHE.pop(k, None)
+
+    # Якщо після видалення застарілих залишилось забагато — прибираємо найстаріші
+    if len(DATA_CACHE) > DATA_CACHE_MAX_ENTRIES:
+        sorted_keys = sorted(DATA_CACHE.items(), key=lambda x: x[1].get("saved_at", 0))
+        to_remove = len(DATA_CACHE) - DATA_CACHE_MAX_ENTRIES
+        for k, _ in sorted_keys[:to_remove]:
+            DATA_CACHE.pop(k, None)
+
+    if expired_keys:
+        print(f"🧹 DATA_CACHE очищено: видалено {len(expired_keys)} записів. Залишилось: {len(DATA_CACHE)}")
 
 
 # --- ПІДКЛЮЧЕННЯ ДО БД ---
@@ -340,6 +359,7 @@ def build_feature_list(df: pd.DataFrame):
 
 
 def save_model_to_db(symbol, interval, model, accuracy, features):
+    conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -361,12 +381,15 @@ def save_model_to_db(symbol, interval, model, accuracy, features):
 
         conn.commit()
         cur.close()
-        conn.close()
     except Exception as e:
         print(f"Помилка збереження моделі: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def load_model_from_db(symbol, interval):
+    conn = None
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -375,13 +398,15 @@ def load_model_from_db(symbol, interval):
             (symbol, interval))
         row = cur.fetchone()
         cur.close()
-        conn.close()
         if row:
             trained_at = row[3]
             if datetime.now(trained_at.tzinfo) - trained_at < timedelta(days=MODEL_MAX_AGE_DAYS):
                 return pickle.loads(row[0]), row[1], row[2]
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠️ Не вдалося завантажити модель з БД ({symbol} {interval}): {e}")
+    finally:
+        if conn is not None:
+            conn.close()
     return None
 
 
@@ -468,9 +493,10 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
     thresh = (df["ATR_pct"] * atr_m) / 100.0
 
     df[features] = df[features].ffill().fillna(0)
-    df["target"] = np.where(df["future_return"] > thresh, 1, np.where(df["future_return"] < -thresh, 0, np.nan))
+    df["target"] = np.where(df["future_return"] > thresh, 1,
+                   np.where(df["future_return"] < -thresh, 0, 2))
 
-    df_c = df.dropna(subset=["target"]).copy()
+    df_c = df.dropna(subset=["future_return"]).copy()  # don't drop neutral
     if len(df_c) < 40: return None, {}, []
 
     X, y = df_c[features].values, df_c["target"].astype(int).values
@@ -489,8 +515,9 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
         "min_child_weight": 2,
         "gamma": 0.05,
         "reg_lambda": 1.2,
-        "scale_pos_weight": float(neg / pos if pos > 0 else 1.0),
-        "eval_metric": "logloss",
+        "objective": "multi:softprob",
+        "num_class": 3,
+        "eval_metric": "mlogloss",
         "tree_method": "hist",
         "n_jobs": 1,
         "verbosity": 0,
@@ -500,9 +527,9 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
         tmp_m = XGBClassifier(**params).fit(X[tr_idx], y[tr_idx])
         p = tmp_m.predict(X[val_idx])
         cv_acc.append(accuracy_score(y[val_idx], p))
-        cv_pre.append(precision_score(y[val_idx], p, zero_division=0))
-        cv_rec.append(recall_score(y[val_idx], p, zero_division=0))
-        cv_f1.append(f1_score(y[val_idx], p, zero_division=0))
+        cv_pre.append(precision_score(y[val_idx], p, zero_division=0, average="macro"))
+        cv_rec.append(recall_score(y[val_idx], p, zero_division=0, average="macro"))
+        cv_f1.append(f1_score(y[val_idx], p, zero_division=0, average="macro"))
 
     final_model = XGBClassifier(**params).fit(X, y)
 
@@ -526,15 +553,19 @@ def train_intelligent_model(symbol, interval, fut_bars, atr_m):
 def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.0, min_accuracy: float = 50.1) -> dict:
     binance_sym = resolve_binance_symbol(symbol)
 
-    mapping = {"1M": ("1w", 4, 0.3), "1w": ("1d", 5, 0.4), "1d": ("1d", 3, 0.4), "4h": ("15m", 8, 0.5),
-               "1h": ("5m", 6, 0.5)}
+    mapping = {
+        "4h": ("4h",  3, 0.4),   # 3 bars ahead = 12h
+        "1d": ("1d",  3, 0.4),   # 3 bars ahead = 3 days
+        "1w": ("1w",  2, 0.35),  # 2 bars ahead = 2 weeks
+        "1M": ("1M",  2, 0.3),   # 2 bars ahead = 2 months
+        "1h": ("1h",  4, 0.45),
+    }
     act_tf, fut_bars, atr_m = mapping.get(interval, (interval, 3, 0.3))
 
     cached = load_model_from_db(binance_sym, act_tf)
     if cached:
         model, acc, features = cached
-        metrics = {"accuracy": acc, "precision": max(0, acc - 2), "recall": max(0, acc - 1),
-                   "f1_score": max(0, acc - 1.5), "top_features": []}
+        metrics = {"accuracy": float(acc) if acc else 50.0, "precision": 0, "recall": 0, "f1_score": 0, "top_features": []}
         mode = "loaded_from_db"
     else:
         model, metrics, features = train_intelligent_model(binance_sym, act_tf, fut_bars, atr_m)
@@ -554,7 +585,9 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
 
     X_pred = df_now[features].iloc[-1:].fillna(0).values
     pred = int(model.predict(X_pred)[0])
-    prob = round(float(model.predict_proba(X_pred)[0][pred]) * 100, 1)
+    proba = model.predict_proba(X_pred)[0]
+    prob = round(float(proba[pred]) * 100, 1)
+    raw_direction = "LONG" if pred == 1 else ("SHORT" if pred == 0 else "NEUTRAL")
 
     last_raw = df_now.iloc[-1]
     price = float(last_raw["close"])
@@ -563,6 +596,8 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     adaptive_min_accuracy = max(48.0, min(70.0, min_accuracy + feedback["accuracy_adjustment"]))
     no_trade_reasons = []
 
+    if pred == 2:
+        no_trade_reasons.append("model_neutral")
     if prob < adaptive_min_confidence:
         no_trade_reasons.append(f"confidence<{adaptive_min_confidence:.1f}")
     if float(metrics["accuracy"]) < adaptive_min_accuracy:
@@ -571,7 +606,6 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
     atr_pct = float(last_raw["ATR_pct"]) if pd.notna(last_raw["ATR_pct"]) else None
     volume_spike = float(last_raw["volume_spike"]) if pd.notna(last_raw["volume_spike"]) else None
     btc_ret_3 = float(last_raw["btc_ret_3"]) if "btc_ret_3" in last_raw and pd.notna(last_raw["btc_ret_3"]) else None
-    raw_direction = "LONG" if pred == 1 else "SHORT"
 
     if atr_pct is not None and atr_pct < MIN_ATR_PCT and prob < adaptive_min_confidence + 8:
         no_trade_reasons.append("flat_market")
@@ -583,7 +617,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
         if raw_direction == "SHORT" and btc_ret_3 > 1.2 and prob < adaptive_min_confidence + 7:
             no_trade_reasons.append("btc_context_bullish")
 
-    final_signal = "NO TRADE ⚪" if no_trade_reasons else ("LONG 🟢" if pred == 1 else "SHORT 🔴")
+    final_signal = "NO TRADE ⚪" if no_trade_reasons else ("LONG 🟢" if pred == 1 else ("SHORT 🔴" if pred == 0 else "NO TRADE ⚪"))
     atr = float(last_raw["ATR"]) if pd.notna(last_raw["ATR"]) else price * 0.02
     dist_sl, dist_tp = min(atr * np.sqrt(fut_bars) * 1.0, price * 0.06), min(atr * np.sqrt(fut_bars) * 2.0,
                                                                              price * 0.12)
@@ -593,7 +627,7 @@ def get_ml_signal(symbol: str, interval: str = "4h", min_confidence: float = 51.
 
     result = {
         "status": "success", "symbol": symbol.upper(), "binance_symbol": f"{binance_sym}USDT", "interval": interval,
-        "signal": final_signal, "raw_prediction": "LONG" if pred == 1 else "SHORT", "mode": mode,
+        "signal": final_signal, "raw_prediction": raw_direction, "mode": mode,
         "confidence": prob, "accuracy": metrics["accuracy"], "precision": metrics.get("precision", 0),
         "recall": metrics.get("recall", 0), "f1_score": metrics.get("f1_score", 0),
         "price": round(price, 6), "rsi": round(float(last_raw["RSI"]), 1) if pd.notna(last_raw["RSI"]) else None,

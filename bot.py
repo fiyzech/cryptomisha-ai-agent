@@ -5,7 +5,7 @@ import os
 import json
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from ml_engine import get_ml_signal, get_db_connection
+from ml_engine import get_ml_signal, get_db_connection, purge_data_cache
 
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -285,8 +285,24 @@ if __name__ == "__main__":
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("🌐 Мікро-сервер для Render запущено!")
 
-    # 2. Запускаємо безкінечний цикл бота
+    # 2. Запускаємо безкінечний цикл бота з захистом від вильотів
     print("🤖 Автономний AI-бот CryptoMisha успішно запущений!")
+    cycle = 0
     while True:
-        run_bot()
-        time.sleep(7200)  # Спимо 2 години
+        cycle += 1
+        try:
+            run_bot()
+        except Exception as exc:
+            # Будь-яка непередбачена помилка НЕ зупиняє бота — логуємо і продовжуємо
+            print(f"💥 [Цикл {cycle}] Критична помилка run_bot(): {exc}. Перезапуск через 5 хвилин...")
+            time.sleep(300)
+            continue
+
+        # Після успішного циклу: чистимо кеш даних і спимо 2 год
+        try:
+            purge_data_cache()
+        except Exception as e:
+            print(f"⚠️ purge_data_cache() failed: {e}")
+
+        print(f"💤 [Цикл {cycle}] Наступний цикл через 2 год...")
+        time.sleep(7200)

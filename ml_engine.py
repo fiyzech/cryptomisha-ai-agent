@@ -532,8 +532,26 @@ def train_intelligent_model(symbol: str, interval: str, fut_bars: int, _atr_m: f
     2. Binary XGBoost         — random=50%, реально досягаємо 54-62%
     3. Feature Selection       — залишаємо top-75% за важливістю → менше шуму
     4. Адаптивна к-сть фолдів — для 1w/1M уникаємо мізерних train-фолдів
+    5. Адаптивні пороги мін. сигналів — 1M/1w мають менше барів за природою
     """
-    df = fetch_binance_data(f"{symbol}USDT", interval, limit=TRAIN_LIMIT)
+    # ── Адаптивні ліміти по таймфрейму ──────────────────────────────
+    # 1M: ~100-168 місячних барів максимум → потрібні знижені пороги
+    # 1w: ~200-400 тижневих барів → трохи нижчі пороги
+    TF_LIMITS = {
+        "1M": {"min_total": 25, "min_cls": 8,  "hold_bars": 3, "tp": 1.5, "sl": 1.0},
+        "1w": {"min_total": 35, "min_cls": 12, "hold_bars": 4, "tp": 1.8, "sl": 1.2},
+        "1d": {"min_total": 60, "min_cls": 20, "hold_bars": TBL_MAX_HOLD, "tp": TBL_TP_MULT, "sl": TBL_SL_MULT},
+        "4h": {"min_total": 60, "min_cls": 20, "hold_bars": TBL_MAX_HOLD, "tp": TBL_TP_MULT, "sl": TBL_SL_MULT},
+    }
+    tf_cfg = TF_LIMITS.get(interval, TF_LIMITS["4h"])
+    min_total = tf_cfg["min_total"]
+    min_cls   = tf_cfg["min_cls"]
+    tp_mult   = tf_cfg["tp"]
+    sl_mult   = tf_cfg["sl"]
+
+    # Fetch більше даних для довгих таймфреймів
+    fetch_limit = TRAIN_LIMIT if interval not in ("1M", "1w") else max(TRAIN_LIMIT, 1500)
+    df = fetch_binance_data(f"{symbol}USDT", interval, limit=fetch_limit)
     if df is None or df.empty: return None, {}, []
 
     df = add_core_features(df)
@@ -542,9 +560,9 @@ def train_intelligent_model(symbol: str, interval: str, fut_bars: int, _atr_m: f
     features = build_feature_list(df)
     df[features] = df[features].ffill().fillna(0)
 
-    # ── Triple Barrier: max_bars = 2× fut_bars, мін. 3 ──────────────
-    hold = max(fut_bars * 2, 3, TBL_MAX_HOLD)
-    df = triple_barrier_labels(df, sl_mult=TBL_SL_MULT, tp_mult=TBL_TP_MULT, max_bars=hold)
+    # ── Triple Barrier: адаптивний hold залежно від таймфрейму ──────
+    hold = max(fut_bars, 2, tf_cfg["hold_bars"])
+    df = triple_barrier_labels(df, sl_mult=sl_mult, tp_mult=tp_mult, max_bars=hold)
 
     # Тільки бари де бар'єр реально досягнутий
     df_c = df.dropna(subset=["target"]).copy()
@@ -554,8 +572,8 @@ def train_intelligent_model(symbol: str, interval: str, fut_bars: int, _atr_m: f
     n_short = int(np.sum(df_c["target"] == 0))
     total   = len(df_c)
 
-    if total < 60 or n_long < 20 or n_short < 20:
-        print(f"⚠️ {symbol}/{interval}: мало сигналів (LONG={n_long}, SHORT={n_short})")
+    if total < min_total or n_long < min_cls or n_short < min_cls:
+        print(f"⚠️ {symbol}/{interval}: мало сигналів (LONG={n_long}, SHORT={n_short}, потрібно мін {min_cls} кожного / {min_total} всього)")
         return None, {}, []
 
     print(f"  📊 {symbol}/{interval}: LONG={n_long}, SHORT={n_short}, всього={total}")

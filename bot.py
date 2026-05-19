@@ -385,8 +385,6 @@ def self_ping_loop():
 
 
 if __name__ == "__main__":
-    global BOT_LAST_CYCLE
-
     threading.Thread(target=run_dummy_server, daemon=True).start()
     print("🌐 Мікро-сервер для Render запущено!")
 

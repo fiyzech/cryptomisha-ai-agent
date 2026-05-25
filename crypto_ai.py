@@ -7,6 +7,7 @@ import psycopg2
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from datetime import datetime
 
 from ml_engine import get_ml_signal, get_db_connection
 
@@ -19,11 +20,85 @@ DB_NAME = os.getenv("POSTGRES_DB", "CryptoPulse_db")
 
 # 👑 ІКОНКА ТА НАЛАШТУВАННЯ СТОРІНКИ
 st.set_page_config(
-    page_title="CryptoMisha AI",
+    page_title="Pulse-AI",
     page_icon="logo.svg",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# ── Plan limits ─────────────────────────────────────────────────────────────
+# Passed from the React frontend via ?userId=...&plan=... query params
+_PLAN_AI_LIMITS: dict[str, int | None] = {
+    "free":     5,
+    "pro":      100,
+    "business": None,   # unlimited
+}
+
+def _get_user_context() -> tuple[str | None, str]:
+    """Return (userId, planKey) from URL query params. Defaults: no user, free plan."""
+    params = st.query_params
+    user_id = params.get("userId") or None
+    plan = (params.get("plan") or "free").lower()
+    if plan not in _PLAN_AI_LIMITS:
+        plan = "free"
+    return user_id, plan
+
+def _ensure_usage_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pulse_ai_usage (
+                user_id TEXT    NOT NULL,
+                month   TEXT    NOT NULL,
+                count   INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, month)
+            )
+        """)
+    conn.commit()
+
+def _get_ai_usage(user_id: str) -> int:
+    month = datetime.now().strftime("%Y-%m")
+    try:
+        conn = get_db_connection()
+        _ensure_usage_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count FROM pulse_ai_usage WHERE user_id = %s AND month = %s",
+                (user_id, month),
+            )
+            row = cur.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    except Exception:
+        return 0
+
+def _record_ai_usage(user_id: str) -> None:
+    month = datetime.now().strftime("%Y-%m")
+    try:
+        conn = get_db_connection()
+        _ensure_usage_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO pulse_ai_usage (user_id, month, count)
+                VALUES (%s, %s, 1)
+                ON CONFLICT (user_id, month)
+                DO UPDATE SET count = pulse_ai_usage.count + 1
+            """, (user_id, month))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def _can_make_request(user_id: str | None, plan: str) -> tuple[bool, int, int | None]:
+    """Returns (allowed, used, limit). limit=None means unlimited."""
+    limit = _PLAN_AI_LIMITS.get(plan)
+    if limit is None:
+        return True, 0, None          # unlimited (business)
+    if not user_id:
+        return True, 0, limit         # guest / no userId — allow but don't track
+    used = _get_ai_usage(user_id)
+    return used < limit, used, limit
+
+# ── end plan limits ──────────────────────────────────────────────────────────
 
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 MODEL_NAME = "llama-3.3-70b-versatile"
@@ -261,6 +336,20 @@ div[data-testid="stExpander"] summary p, details[data-testid="stExpander"] summa
 .news-title a { color: var(--text); text-decoration: none; }
 .news-title a:hover { color: var(--accent); }
 .news-meta { font-size: 0.75rem; color: var(--muted); display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+
+/* Limit-exceeded banner */
+.limit-banner {
+    background: rgba(255,59,48,0.08);
+    border: 1px solid rgba(255,59,48,0.45);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin: 0.75rem 0;
+    font-size: 0.92rem;
+    line-height: 1.6;
+}
+.limit-banner b { color: #FF3B30; }
+.limit-banner a { color: var(--accent); font-weight: 600; text-decoration: none; }
+.limit-banner a:hover { text-decoration: underline; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -605,7 +694,7 @@ def stream_ollama(prompt: str):
 
 def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news):
     news_text = "Актуальні новини по монеті:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Специфічних новин зараз немає."
-    return f"""Ти — Міша, фінансовий AI-асистент. Пиши чистою українською. Стиль: коротко, впевнено, живо, без води.
+    return f"""Ти — Pulse-AI, фінансовий AI-асистент. Пиши чистою українською. Стиль: коротко, впевнено, живо, без води.
 Проаналізуй {name} ({symbol}) на основі цих даних:
 - Ціна: {fmt_price(price)}
 - Зміна 24г: {change_24h:+.2f}%
@@ -621,10 +710,10 @@ def build_analysis_prompt(name, symbol, price, change_24h, change_7d, cap, vol, 
 Напиши короткий живий огляд у 4-5 реченнях. Не давай фінансову пораду, але поясни ситуацію зрозуміло."""
 
 def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news, history, user_q):
-    history_text = "\n".join([f"{'Користувач' if m['role'] == 'user' else 'Ти (Міша)'}: {m['content'].replace(chr(10), ' ')}" for m in history[-6:]])
+    history_text = "\n".join([f"{'Користувач' if m['role'] == 'user' else 'Ти (Pulse-AI)'}: {m['content'].replace(chr(10), ' ')}" for m in history[-6:]])
     news_text = "Останні заголовки новин:\n" + "\n".join([f"- {n.get('title')}" for n in news]) if news else "Немає свіжих новин."
     realtime_context = build_realtime_price_context(user_q)
-    return f"""Ти — Міша, CryptoMisha AI.
+    return f"""Ти — Pulse-AI, AI-асистент для крипто-аналізу.
 Твій стиль: українська мова; коротко, живо, по ділу; трохи зухвало, але без токсичності; не повторюй постійно привітання.
 Не вигадуй ціни, відсотки, новини або прогнози.
 Ти можеш відповідати не тільки про крипту.
@@ -636,19 +725,29 @@ def build_chat_prompt(name, symbol, price, change_24h, cap, vol, change_7d, news
 Історія чату:
 {history_text}
 Запит користувача: {user_q}
-Відповідь Міші:"""
+Відповідь Pulse-AI:"""
 
-for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []), ("cg_name", None), ("generate_new", False), ("selected_interval", "4h")]:
+for key, default in [("messages", []), ("current_coin", None), ("coin_data", None), ("coin_prices", []), ("cg_name", None), ("generate_new", False), ("selected_interval", "4h"), ("limit_exceeded", False), ("limit_used", 0), ("limit_max", 5)]:
     if key not in st.session_state: st.session_state[key] = default
 
 def handle_chat_submit():
     user_val = st.session_state.chat_input_widget
     if user_val.strip():
-        st.session_state.messages.append({"role": "user", "content": user_val})
-        st.session_state.generate_new = True
+        user_id, plan = _get_user_context()
+        allowed, used, limit = _can_make_request(user_id, plan)
+        if not allowed:
+            st.session_state.limit_exceeded = True
+            st.session_state.limit_used = used
+            st.session_state.limit_max = limit
+        else:
+            st.session_state.limit_exceeded = False
+            st.session_state.messages.append({"role": "user", "content": user_val})
+            st.session_state.generate_new = True
+            if user_id:
+                _record_ai_usage(user_id)
     st.session_state.chat_input_widget = ""
 
-st.markdown('<div class="hero-title">CryptoMisha AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="hero-title">Pulse-AI</div>', unsafe_allow_html=True)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 
@@ -859,12 +958,12 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
     if analyze_btn or analysis_key not in st.session_state:
         prompt = build_analysis_prompt(display_name, user_ticker, price, change_24h, change_7d, cap, vol, ath, low_24h, high_24h, spark_info, news_articles)
         analysis_placeholder = st.empty()
-        analysis_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div><span class="thinking">Міша аналізує графіки та новини... 🤔</span></div>', unsafe_allow_html=True)
+        analysis_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Pulse-AI · 📊 Аналіз {safe_text(display_name)}</div><span class="thinking">Pulse-AI аналізує графіки та новини... 🤔</span></div>', unsafe_allow_html=True)
 
         full_analysis = ""
         for chunk in stream_ollama(prompt):
             full_analysis += chunk
-            analysis_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · 📊 Аналіз {safe_text(display_name)}</div>{safe_text(full_analysis)}</div>', unsafe_allow_html=True)
+            analysis_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Pulse-AI · 📊 Аналіз {safe_text(display_name)}</div>{safe_text(full_analysis)}</div>', unsafe_allow_html=True)
 
         st.session_state[analysis_key] = full_analysis
         st.session_state.messages = [{"role": "ai", "content": full_analysis, "label": f"📊 Аналіз {display_name}"}]
@@ -872,27 +971,46 @@ if user_ticker and (analyze_btn or (st.session_state.current_coin == user_ticker
 
     for msg in st.session_state.messages:
         if msg["role"] == "ai":
-            st.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · {safe_text(msg.get("label", "Відповідь"))}</div>{safe_text(msg["content"])}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Pulse-AI · {safe_text(msg.get("label", "Відповідь"))}</div>{safe_text(msg["content"])}</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="msg-user"><div class="msg-label msg-label-user">▸ Ти</div>{safe_text(msg["content"])}</div>', unsafe_allow_html=True)
 
     if st.session_state.generate_new:
         chat_prompt = build_chat_prompt(display_name, user_ticker, price, change_24h, cap, vol, change_7d, news_articles, st.session_state.messages[:-1], st.session_state.messages[-1]["content"])
         chat_placeholder = st.empty()
-        chat_placeholder.markdown('<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div><span class="thinking">Міша думає... 🤔</span></div>', unsafe_allow_html=True)
+        chat_placeholder.markdown('<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Pulse-AI · Відповідь</div><span class="thinking">Pulse-AI думає... 🤔</span></div>', unsafe_allow_html=True)
 
         full_answer = ""
         for chunk in stream_ollama(chat_prompt):
             full_answer += chunk
-            chat_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Міша · Відповідь</div>{safe_text(full_answer)}</div>', unsafe_allow_html=True)
+            chat_placeholder.markdown(f'<div class="msg-ai"><div class="msg-label msg-label-ai">⬡ Pulse-AI · Відповідь</div>{safe_text(full_answer)}</div>', unsafe_allow_html=True)
 
         st.session_state.messages.append({"role": "ai", "content": full_answer, "label": "Відповідь"})
         st.session_state.generate_new = False
         st.rerun()
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
-    st.text_input("Питання", placeholder="Напиши щось Міші...", key="chat_input_widget", on_change=handle_chat_submit, label_visibility="collapsed")
-    st.markdown('<div class="hint" style="cursor: default;">↵ Enter — надіслати повідомлення</div>', unsafe_allow_html=True)
+
+    if st.session_state.limit_exceeded:
+        used = st.session_state.limit_used
+        limit = st.session_state.limit_max
+        _, plan = _get_user_context()
+        next_plan = "Pro" if plan == "free" else "Business"
+        st.markdown(
+            f'<div class="limit-banner">'
+            f'<b>Ліміт вичерпано</b> — ти використав <b>{used} з {limit}</b> Pulse-AI-запитів цього місяця.<br>'
+            f'Оновись до плану <b>{next_plan}</b>, щоб отримати більше запитів.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    _uid, _plan = _get_user_context()
+    _limit = _PLAN_AI_LIMITS.get(_plan)
+    _used_now = _get_ai_usage(_uid) if _uid else 0
+    _quota_hint = f"Запити: {_used_now} / {_limit} цього місяця" if _limit is not None else "Необмежені запити"
+
+    st.text_input("Питання", placeholder="Напиши щось Pulse-AI...", key="chat_input_widget", on_change=handle_chat_submit, label_visibility="collapsed")
+    st.markdown(f'<div class="hint" style="cursor: default;">↵ Enter — надіслати повідомлення &nbsp;·&nbsp; {_quota_hint}</div>', unsafe_allow_html=True)
 
 else:
     st.markdown(f"""
